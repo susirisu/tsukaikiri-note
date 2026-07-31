@@ -1,0 +1,25 @@
+{
+  "name": "つかいきりノート",
+  "short_name": "つかいきり",
+  "description": "日用品の使い切りタイミングを管理する買い忘れ防止アプリ",
+  "start_url": "/tsukaikiri-note/",
+  "scope": "/tsukaikiri-note/",
+  "display": "standalone",
+  "background_color": "#F3F5F0",
+  "theme_color": "#2F4858",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
