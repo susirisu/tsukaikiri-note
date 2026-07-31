@@ -9,22 +9,22 @@ const GENRES = ["食品・飲料", "洗面・バス用品", "掃除・洗濯用�
 const haptics = {
   light: () => {
     try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(8);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(18);
     } catch (e) {}
   },
   medium: () => {
     try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(15);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(30);
     } catch (e) {}
   },
   success: () => {
     try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(20);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(40);
     } catch (e) {}
   },
   warning: () => {
     try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([15, 40, 15]);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([25, 40, 25]);
     } catch (e) {}
   },
 };
@@ -639,6 +639,7 @@ export default function App() {
       lastPurchaseDate: todayISO(),
       extensionDays: 0,
       spareStock: 0,
+      warnMode: "percent",
     };
     persist([...items, item]);
     showToast(`「${item.name}」を登録しました`);
@@ -1380,7 +1381,7 @@ function WarnPercentSlider({ cycleDays, percent, warnDays, onChange }) {
     { label: "ふつう", value: 20, color: COLORS.warn },
     { label: "ギリギリ", value: 10, color: COLORS.danger },
   ];
-  const daysLeftAtWarn = Math.max(0, cycleDays - parseInt(warnDays, 10) || 0);
+  const daysLeftAtWarn = Math.max(0, parseInt(warnDays, 10) || 0);
 
   return (
     <div style={{ marginBottom: 14 }}>
@@ -1907,7 +1908,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
     return Math.max(5, Math.min(50, raw || 20));
   })();
   const [percent, setPercent] = useState(initialPercent);
-  const [warnMode, setWarnMode] = useState("percent");
+  const [warnMode, setWarnMode] = useState(item.warnMode || "percent");
 
   const cycleNum = () => parseInt(cycleDays, 10) || item.cycleDays;
 
@@ -2215,6 +2216,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             spareStock: Math.max(0, spareStock),
             cycleDays: cycleNum(),
             warningDays: Math.max(0, parseInt(warningDays, 10) || 0),
+            warnMode,
             barcodes: barcodes.map((b) => b.trim()).filter(Boolean),
           })
         }
