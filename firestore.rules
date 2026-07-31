@@ -1,8 +1,15 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 許可する人のメールアドレスをここに追加してください（複数人いる場合は行を増やす）
+    function isAllowed() {
+      return request.auth != null && request.auth.token.email in [
+        "your-email@gmail.com"
+      ];
+    }
+
     match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isAllowed() && request.auth.uid == userId;
     }
   }
 }

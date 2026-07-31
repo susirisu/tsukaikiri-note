@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Home, ShoppingCart, ScanLine, X, Plus, Trash2, Check, Package, ChevronRight, AlertCircle, Settings, Loader2, Tag, ChevronDown, LogIn, LogOut, Cloud, CloudOff } from "lucide-react";
-import { storage, subscribeAuth, signIn, signOutUser, syncOnLogin, isFirebaseConfigured } from "./storage";
+import { storage, subscribeAuth, signIn, signOutUser, syncOnLogin, isFirebaseConfigured, isEmailAllowed } from "./storage";
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap');`;
 
@@ -238,11 +238,78 @@ function LoginGate({ darkMode, onSignIn }) {
   );
 }
 
+function NotAuthorized({ email, darkMode, onBack }) {
+  return (
+    <ThemeShell darkMode={darkMode}>
+      <div
+        style={{
+          width: 72,
+          height: 72,
+          borderRadius: 20,
+          background: COLORS.dangerBg,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 20,
+        }}
+      >
+        <AlertCircle size={34} color={COLORS.danger} />
+      </div>
+      <h1
+        style={{
+          fontFamily: "'Zen Maru Gothic', sans-serif",
+          fontWeight: 900,
+          fontSize: 20,
+          margin: 0,
+          color: COLORS.danger,
+          textAlign: "center",
+        }}
+      >
+        認証されていないため
+        <br />
+        表示できません
+      </h1>
+      <p style={{ fontSize: 13, color: COLORS.inkSoft, textAlign: "center", marginTop: 10, marginBottom: 8, lineHeight: 1.7 }}>
+        {email ? (
+          <>
+            <span style={{ fontWeight: 700 }}>{email}</span> は
+            <br />
+            このアプリの利用を許可されていません。
+          </>
+        ) : (
+          "このアカウントはこのアプリの利用を許可されていません。"
+        )}
+      </p>
+      <p style={{ fontSize: 12, color: COLORS.inkSoft, textAlign: "center", marginBottom: 32, lineHeight: 1.7 }}>
+        自動的にログアウトしました。
+        <br />
+        許可されたアカウントでログインし直してください。
+      </p>
+      <button
+        onClick={onBack}
+        style={{
+          width: "100%",
+          padding: "14px 0",
+          borderRadius: 12,
+          border: "none",
+          background: COLORS.navy,
+          color: "#fff",
+          fontWeight: 700,
+          fontSize: 15,
+        }}
+      >
+        ログイン画面に戻る
+      </button>
+    </ThemeShell>
+  );
+}
+
 export default function App() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(!isFirebaseConfigured);
+  const [unauthorizedEmail, setUnauthorizedEmail] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState("home");
   const [scanning, setScanning] = useState(false);
@@ -307,9 +374,16 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = subscribeAuth((nextUser, ready) => {
-      setUser(nextUser);
       setAuthReady(ready);
+      if (nextUser && !isEmailAllowed(nextUser.email)) {
+        setUnauthorizedEmail(nextUser.email);
+        setUser(null);
+        signOutUser();
+        return;
+      }
+      setUser(nextUser);
       if (nextUser) {
+        setUnauthorizedEmail(null);
         setSyncing(true);
         syncOnLogin()
           .then(() => loadAllFromStorage())
@@ -324,11 +398,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
   const saveYahooAppId = async (value) => {
     setYahooAppId(value);
+    haptics.success();
     try {
       await storage.set("yahoo-app-id", value);
-      haptics.success();
     } catch (e) {
       console.error("appidの保存に失敗しました", e);
     }
@@ -336,9 +414,9 @@ export default function App() {
 
   const saveWarnPercent = async (percent) => {
     setWarnPercent(percent);
+    haptics.success();
     try {
       await storage.set("warn-percent", String(percent));
-      haptics.success();
     } catch (e) {
       console.error("設定の保存に失敗しました", e);
     }
@@ -644,6 +722,15 @@ export default function App() {
   const urgentCount = enriched.filter((it) => it.level !== "safe").length;
 
   // Firebaseが設定されている場合のみ、ログインするまで中身を一切表示しない
+  if (isFirebaseConfigured && unauthorizedEmail) {
+    return (
+      <NotAuthorized
+        email={unauthorizedEmail}
+        darkMode={darkMode}
+        onBack={() => setUnauthorizedEmail(null)}
+      />
+    );
+  }
   if (isFirebaseConfigured && !authReady) {
     return <SplashScreen darkMode={darkMode} />;
   }

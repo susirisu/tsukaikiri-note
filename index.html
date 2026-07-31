@@ -8,6 +8,29 @@
     <link rel="manifest" href="manifest.json" />
     <link rel="icon" href="icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="icon-192.png" />
+    <style>
+      :root {
+        --color-bg: #F3F5F0;
+      }
+      [data-theme="dark"] {
+        --color-bg: #161A17;
+      }
+      html, body, #root {
+        margin: 0;
+        min-height: 100%;
+        background: var(--color-bg);
+      }
+    </style>
+    <script>
+      // Reactが起動する前に、保存済みのダークモード設定を反映しておく
+      // （画面外の余白が一瞬だけ白くなる「フラッシュ」を防ぐため）
+      try {
+        var saved = localStorage.getItem("tsukaikiri:dark-mode");
+        if (saved === "true") {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

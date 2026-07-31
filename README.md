@@ -32,7 +32,16 @@ cp .env.example .env
 
 4. **Authentication → Settings → 承認済みドメイン** に、後で使うGitHub PagesのURL（例：`ユーザー名.github.io`）を追加してください。追加しないとGoogleログインが失敗します。
 
-## 3. ローカルで動作確認
+## 3. 利用を許可するアカウントを制限する
+
+デフォルトのままだと、Googleアカウントさえあれば誰でもログインできてしまいます。自分（と許可した人）だけが使えるように、2箇所を設定してください。**特にfirestore.rulesの方が本当のセキュリティ境界（サーバー側で強制される制限）なので、こちらは必須です。**
+
+1. **`firestore.rules`** を開き、`"your-email@gmail.com"` の部分を実際に許可したいGoogleアカウントのメールアドレスに書き換える（複数人いる場合はカンマ区切りで行を追加）。書き換えたら、Firebaseコンソール → Firestore Database → ルール タブに貼り直して公開する
+2. **`.env`**（ローカル用）と、GitHub Secrets（公開用）の両方に `VITE_ALLOWED_EMAILS` を追加。値は同じメールアドレスをカンマ区切りで（例：`you@gmail.com,family@gmail.com`）
+
+この2箇所を設定すると、許可されていないアカウントでログインした場合は自動的にログアウトされ、「認証されていないため表示できません」という画面が表示されます。
+
+## 4. ローカルで動作確認
 
 ```
 npm install
@@ -42,7 +51,7 @@ npm run dev
 表示されたURL（`http://localhost:5173` など）をブラウザで開いて、ログインや商品登録ができるか確認してください。
 バーコードスキャンはカメラ権限が必要なので、スマホの場合は同じWi-Fi内からアクセスするか、後述のGitHub Pages公開後（HTTPS）に試すのが確実です。
 
-## 4. GitHubに公開する
+## 5. GitHubに公開する
 
 1. GitHubで新しいリポジトリを作成（例：`tsukaikiri-note`）
 2. `vite.config.js` の `base` を、リポジトリ名に合わせて書き換える（例：`/tsukaikiri-note/`）。`public/manifest.json` の `start_url` と `scope` も同じ値に揃えてください
@@ -58,7 +67,7 @@ git push -u origin main
 ```
 
 4. リポジトリの **Settings → Pages** で、Source を「GitHub Actions」に設定
-5. リポジトリの **Settings → Secrets and variables → Actions** で、`.env` に入れた6つの値をそれぞれ同じ名前（`VITE_FIREBASE_API_KEY` など）でSecretとして登録
+5. リポジトリの **Settings → Secrets and variables → Actions** で、`.env` に入れた7つの値（Firebaseの6つ＋`VITE_ALLOWED_EMAILS`）をそれぞれ同じ名前でSecretとして登録
 6. mainブランチにpushすると自動でビルド・公開されます（Actionsタブで進捗を確認できます）
 7. 公開されたURL（`https://ユーザー名.github.io/tsukaikiri-note/`）にスマホでアクセスし、「ホーム画面に追加」するとアプリのように使えます
 
@@ -70,4 +79,5 @@ git push -u origin main
 
 - バーコードスキャンは `BarcodeDetector` API を使用しており、Android版Chromeなど対応ブラウザが必要です。非対応ブラウザでは手入力にフォールバックします。
 - カメラ・振動(Vibration API)はいずれもHTTPS環境でのみ動作します。GitHub Pagesは自動的にHTTPSになるので問題ありません。
+- 振動(Haptics)はAndroid版Chromeなど対応ブラウザ・実機のみで動作します。PC(Windowsなど)のブラウザには振動するハードウェア自体がないため、動作確認はスマホ実機で行ってください。iPhone(Safari)は仕様上Vibration API自体に対応していません。
 - Firebaseを設定しなくてもアプリ自体は動きます（ローカル保存のみ、単一端末での利用になります）。

@@ -99,4 +99,15 @@ export async function syncOnLogin() {
   }
 }
 
+const ALLOWED_EMAILS = (import.meta.env.VITE_ALLOWED_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+// VITE_ALLOWED_EMAILSが未設定の場合は制限しません（本番運用では必ず設定してください）
+export function isEmailAllowed(email) {
+  if (ALLOWED_EMAILS.length === 0) return true;
+  return !!email && ALLOWED_EMAILS.includes(email.toLowerCase());
+}
+
 export { isFirebaseConfigured };
