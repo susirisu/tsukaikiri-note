@@ -109,6 +109,31 @@ const daysBetween = (targetDate) => {
 const calcWarnDays = (cycleDays, remainPercent) =>
   Math.max(2, Math.round((cycleDays || 0) * (remainPercent / 100)));
 
+// モーダルを閉じる際、退場アニメーションが終わるまで少しだけ表示を保持するためのフック
+function useLingering(value, duration = 220) {
+  const [display, setDisplay] = useState(value);
+  const [closing, setClosing] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (value) {
+      clearTimeout(timerRef.current);
+      setDisplay(value);
+      setClosing(false);
+    } else if (display) {
+      setClosing(true);
+      timerRef.current = setTimeout(() => {
+        setDisplay(null);
+        setClosing(false);
+      }, duration);
+    }
+    return () => clearTimeout(timerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  return [display, closing];
+}
+
 function statusOf(item) {
   const spareCycles = (item.spareStock || 0) * item.cycleDays;
   const totalCycle = item.cycleDays + (item.extensionDays || 0) + spareCycles;
@@ -713,6 +738,11 @@ export default function App() {
     haptics.success();
   };
 
+  const [displayEditingItem, editingClosing] = useLingering(editingItem);
+  const [displayExtendingItem, extendingClosing] = useLingering(extendingItem);
+  const [displayScanning, scanningClosing] = useLingering(scanning);
+  const [displaySettings, settingsClosing] = useLingering(showSettings);
+
   const enriched = items
     .map((it) => {
       const status = statusOf(it);
@@ -763,6 +793,13 @@ export default function App() {
         input { font-family: inherit; }
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes modalSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        @keyframes modalSlideDown { from { transform: translateY(0); } to { transform: translateY(100%); } }
+        @keyframes overlayFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes overlayFadeOut { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes bounceScale { 0% { transform: scale(1); } 35% { transform: scale(1.35); } 65% { transform: scale(0.92); } 100% { transform: scale(1); } }
+        @keyframes dropDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes dropUp { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
       `}</style>
 
       {/* Header */}
@@ -895,8 +932,9 @@ export default function App() {
       )}
 
       {/* Scan modal */}
-      {scanning && (
+      {displayScanning && (
         <ScanModal
+          closing={scanningClosing}
           videoRef={videoRef}
           scanUnsupported={scanUnsupported}
           manualCode={manualCode}
@@ -928,9 +966,10 @@ export default function App() {
       )}
 
       {/* Edit modal */}
-      {editingItem && (
+      {displayEditingItem && (
         <EditModal
-          item={editingItem}
+          closing={editingClosing}
+          item={displayEditingItem}
           onClose={() => setEditingItem(null)}
           onSave={(fields) => {
             updateItemFields(editingItem.id, fields);
@@ -947,9 +986,10 @@ export default function App() {
       )}
 
       {/* Extend modal */}
-      {extendingItem && (
+      {displayExtendingItem && (
         <ExtendModal
-          item={extendingItem}
+          closing={extendingClosing}
+          item={displayExtendingItem}
           days={extendDays}
           setDays={setExtendDays}
           onClose={() => {
@@ -965,8 +1005,9 @@ export default function App() {
       )}
 
       {/* Settings modal */}
-      {showSettings && (
+      {displaySettings && (
         <SettingsModal
+          closing={settingsClosing}
           appId={yahooAppId}
           onSaveAppId={saveYahooAppId}
           warnPercent={warnPercent}
@@ -1177,6 +1218,7 @@ function CompactItemRow({ item, onEdit, onExtend }) {
 
 function GenreAccordion({ genre, count, defaultOpen = true, children }) {
   const [open, setOpen] = useState(defaultOpen);
+
   return (
     <div style={{ marginBottom: 14 }}>
       <button
@@ -1205,7 +1247,17 @@ function GenreAccordion({ genre, count, defaultOpen = true, children }) {
           style={{ color: COLORS.inkSoft, transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.15s" }}
         />
       </button>
-      {open && <div style={{ marginTop: 6 }}>{children}</div>}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: open ? "1fr" : "0fr",
+          transition: "grid-template-rows 0.28s ease",
+        }}
+      >
+        <div style={{ overflow: "hidden" }}>
+          <div style={{ marginTop: 6 }}>{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1216,7 +1268,7 @@ function HomeList({ items, onEdit }) {
       <EmptyState
         icon={<Package size={34} color={COLORS.inkSoft} />}
         title="まだ何も登録されていません"
-        body="右下の丸いボタンからバーコードをスキャンして、日用品を登録しましょう。"
+        body="画面下の丸いボタンからバーコードをスキャンして、日用品を登録しましょう。"
       />
     );
   }
@@ -1304,7 +1356,7 @@ function EmptyState({ icon, title, body }) {
   );
 }
 
-function ModalShell({ onClose, children, title }) {
+function ModalShell({ onClose, children, title, closing }) {
   return (
     <div
       style={{
@@ -1315,6 +1367,8 @@ function ModalShell({ onClose, children, title }) {
         alignItems: "flex-end",
         justifyContent: "center",
         zIndex: 100,
+        animation: closing ? "overlayFadeOut 0.22s ease forwards" : "overlayFadeIn 0.18s ease",
+        pointerEvents: closing ? "none" : "auto",
       }}
       onClick={onClose}
     >
@@ -1328,6 +1382,9 @@ function ModalShell({ onClose, children, title }) {
           padding: 18,
           maxHeight: "88vh",
           overflowY: "auto",
+          animation: closing
+            ? "modalSlideDown 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards"
+            : "modalSlideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1)",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -1461,41 +1518,49 @@ function FixedWarnAdvanced({ mode, fixedDays, onToggle, onFixedDaysChange }) {
       >
         詳細設定 {open ? "▲" : "▼"}
       </button>
-      {open && (
-        <div
-          style={{
-            marginTop: 10,
-            background: COLORS.card,
-            border: `1px solid ${COLORS.line}`,
-            borderRadius: 12,
-            padding: 12,
-          }}
-        >
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={useFixed}
-              onChange={(e) => {
-                haptics.light();
-                onToggle(e.target.checked);
-              }}
-              style={{ width: 16, height: 16 }}
-            />
-            割合ではなく日数で指定する
-          </label>
-          {useFixed && (
-            <>
-              <label style={{ ...labelStyle, marginTop: 12 }}>何日前から買い物リストに入れるか</label>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: open ? "1fr" : "0fr",
+          transition: "grid-template-rows 0.28s ease",
+        }}
+      >
+        <div style={{ overflow: "hidden" }}>
+          <div
+            style={{
+              marginTop: 10,
+              background: COLORS.card,
+              border: `1px solid ${COLORS.line}`,
+              borderRadius: 12,
+              padding: 12,
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
               <input
-                style={{ ...inputStyle, marginBottom: 0 }}
-                type="number"
-                value={fixedDays}
-                onChange={(e) => onFixedDaysChange(e.target.value)}
+                type="checkbox"
+                checked={useFixed}
+                onChange={(e) => {
+                  haptics.light();
+                  onToggle(e.target.checked);
+                }}
+                style={{ width: 16, height: 16 }}
               />
-            </>
-          )}
+              割合ではなく日数で指定する
+            </label>
+            {useFixed && (
+              <>
+                <label style={{ ...labelStyle, marginTop: 12 }}>何日前から買い物リストに入れるか</label>
+                <input
+                  style={{ ...inputStyle, marginBottom: 0 }}
+                  type="number"
+                  value={fixedDays}
+                  onChange={(e) => onFixedDaysChange(e.target.value)}
+                />
+              </>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1577,6 +1642,7 @@ function CyclePicker({ days, onChange }) {
 
 function ScanModal(props) {
   const {
+    closing,
     videoRef,
     scanUnsupported,
     manualCode,
@@ -1608,7 +1674,7 @@ function ScanModal(props) {
 
   if (pendingKnown) {
     return (
-      <ModalShell onClose={onClose} title="この内容で記録しますか？">
+      <ModalShell onClose={onClose} closing={closing} title="この内容で記録しますか？">
         <div
           style={{
             background: COLORS.card,
@@ -1638,7 +1704,7 @@ function ScanModal(props) {
 
   if (unknownStep === "choose") {
     return (
-      <ModalShell onClose={onClose} title="未登録のバーコードです">
+      <ModalShell onClose={onClose} closing={closing} title="未登録のバーコードです">
         <p style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 16 }}>
           この商品はまだ登録されていません。どうしますか？
         </p>
@@ -1654,7 +1720,7 @@ function ScanModal(props) {
 
   if (unknownStep === "new") {
     return (
-      <ModalShell onClose={onClose} title="新しい商品を登録">
+      <ModalShell onClose={onClose} closing={closing} title="新しい商品を登録">
         {lookup?.loading && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: COLORS.inkSoft, marginBottom: 14 }}>
             <Loader2 size={16} className="spin" /> Yahoo!ショッピングで商品情報を検索中…
@@ -1706,7 +1772,7 @@ function ScanModal(props) {
 
   if (unknownStep === "duplicateConfirm") {
     return (
-      <ModalShell onClose={onClose} title="同じ名前の商品があります">
+      <ModalShell onClose={onClose} closing={closing} title="同じ名前の商品があります">
         <div
           style={{
             background: COLORS.warnBg,
@@ -1740,7 +1806,7 @@ function ScanModal(props) {
     })).filter((g) => g.list.length > 0);
 
     return (
-      <ModalShell onClose={onClose} title="どの商品の買い替えですか？">
+      <ModalShell onClose={onClose} closing={closing} title="どの商品の買い替えですか？">
         {items.length === 0 ? (
           <p style={{ fontSize: 13, color: COLORS.inkSoft }}>登録済みの商品がまだありません。</p>
         ) : (
@@ -1776,7 +1842,7 @@ function ScanModal(props) {
   }
 
   return (
-    <ModalShell onClose={onClose} title="バーコードをスキャン">
+    <ModalShell onClose={onClose} closing={closing} title="バーコードをスキャン">
       {!scanUnsupported ? (
         <div
           style={{
@@ -1828,10 +1894,10 @@ function ScanModal(props) {
   );
 }
 
-function ExtendModal({ item, days, setDays, onClose, onSubmit }) {
+function ExtendModal({ item, days, setDays, onClose, onSubmit, closing }) {
   const presets = [3, 7, 14];
   return (
-    <ModalShell onClose={onClose} title={`「${item.name}」の期限を延長`}>
+    <ModalShell onClose={onClose} closing={closing} title={`「${item.name}」の期限を延長`}>
       <p style={{ fontSize: 13, color: COLORS.inkSoft, marginBottom: 14 }}>
         まだ持ちそうな場合、目安日数を延ばせます。買い物リストに入るタイミングも後ろにずれます。
       </p>
@@ -1890,7 +1956,7 @@ function FieldSection({ title, children }) {
   );
 }
 
-function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExtend, showBuyButton }) {
+function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExtend, showBuyButton, closing }) {
   const [name, setName] = useState(item.name);
   const [genre, setGenre] = useState(item.genre || "その他");
   const [cycleDays, setCycleDays] = useState(String(item.cycleDays));
@@ -1940,7 +2006,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
 
   if (confirming) {
     return (
-      <ModalShell onClose={onClose} title="この内容で記録しますか？">
+      <ModalShell onClose={onClose} closing={closing} title="この内容で記録しますか？">
         <div
           style={{
             background: COLORS.card,
@@ -1976,7 +2042,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
 
   if (confirmingDelete) {
     return (
-      <ModalShell onClose={onClose} title="この商品を削除しますか？">
+      <ModalShell onClose={onClose} closing={closing} title="この商品を削除しますか？">
         <div
           style={{
             background: COLORS.dangerBg,
@@ -2015,7 +2081,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
   }
 
   return (
-    <ModalShell onClose={onClose} title="商品を編集">
+    <ModalShell onClose={onClose} closing={closing} title="商品を編集">
       {showBuyButton && (
         <button
           style={{
@@ -2085,7 +2151,16 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             −
           </button>
           <div style={{ minWidth: 60, textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 900, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.navy }}>
+            <div
+              key={spareStock}
+              style={{
+                fontSize: 22,
+                fontWeight: 900,
+                fontFamily: "'Zen Maru Gothic', sans-serif",
+                color: COLORS.navy,
+                animation: "bounceScale 0.3s ease",
+              }}
+            >
               {spareStock}
             </div>
             <div style={{ fontSize: 10.5, color: COLORS.inkSoft }}>個</div>
@@ -2171,39 +2246,47 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
           <span>登録バーコード（{barcodes.length}件）</span>
           {barcodesOpen ? "▲" : "▼"}
         </button>
-        {barcodesOpen && (
-          <div style={{ marginTop: 12 }}>
-            {barcodes.length === 0 && (
-              <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
-                バーコードが登録されていません。スキャンでの自動照合ができなくなります。
-              </div>
-            )}
-            {barcodes.map((code, i) => (
-              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                <input
-                  style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
-                  value={code}
-                  onChange={(e) => updateBarcode(i, e.target.value)}
-                  inputMode="numeric"
-                />
-                <button
-                  type="button"
-                  onClick={() => deleteBarcode(i)}
-                  style={{
-                    border: `1px solid ${COLORS.line}`,
-                    background: COLORS.card,
-                    borderRadius: 10,
-                    padding: "9px 10px",
-                    color: COLORS.danger,
-                    flexShrink: 0,
-                  }}
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            ))}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateRows: barcodesOpen ? "1fr" : "0fr",
+            transition: "grid-template-rows 0.28s ease",
+          }}
+        >
+          <div style={{ overflow: "hidden" }}>
+            <div style={{ marginTop: 12 }}>
+              {barcodes.length === 0 && (
+                <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
+                  バーコードが登録されていません。スキャンでの自動照合ができなくなります。
+                </div>
+              )}
+              {barcodes.map((code, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <input
+                    style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+                    value={code}
+                    onChange={(e) => updateBarcode(i, e.target.value)}
+                    inputMode="numeric"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => deleteBarcode(i)}
+                    style={{
+                      border: `1px solid ${COLORS.line}`,
+                      background: COLORS.card,
+                      borderRadius: 10,
+                      padding: "9px 10px",
+                      color: COLORS.danger,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
-        )}
+        </div>
       </FieldSection>
 
       <button
@@ -2246,13 +2329,14 @@ function SettingsModal({
   syncing,
   onSignIn,
   onSignOut,
+  closing,
   onClose,
 }) {
   const [value, setValue] = useState(appId || "");
   const [percent, setPercent] = useState(warnPercent);
 
   return (
-    <ModalShell onClose={onClose} title="設定">
+    <ModalShell onClose={onClose} closing={closing} title="設定">
       <FieldSection title="クラウド同期">
         {user ? (
           <div>
