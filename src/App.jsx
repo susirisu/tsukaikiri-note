@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Home, ShoppingCart, ScanLine, X, Plus, Trash2, Check, Package, ChevronRight, AlertCircle, Settings, Loader2, Tag, ChevronDown, LogIn, LogOut, Cloud, CloudOff } from "lucide-react";
+import { Home, ShoppingCart, ScanLine, X, Plus, Trash2, Check, Package, ChevronRight, ChevronLeft, AlertCircle, Settings, Loader2, Tag, ChevronDown, HelpCircle, History, CheckSquare, Square, Calendar as CalendarIcon, Search, LogIn, LogOut, Cloud, CloudOff } from "lucide-react";
 import { storage, subscribeAuth, signIn, signOutUser, syncOnLogin, isFirebaseConfigured, isEmailAllowed } from "./storage";
-
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap');`;
 
 const GENRES = ["食品・飲料", "洗面・バス用品", "掃除・洗濯用品", "医薬品・衛生用品", "キッチン用品", "ペット用品", "その他"];
@@ -95,6 +94,26 @@ const todayISO = () => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
+const nowStamp = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${day}T${hh}:${mi}:${ss}`;
+};
+const formatStamp = (stamp) => {
+  const [datePart, timePart] = stamp.split("T");
+  return timePart ? `${datePart} ${timePart.slice(0, 5)}` : datePart;
+};
+const formatDateObj = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 const addDays = (iso, days) => {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + days);
@@ -108,6 +127,45 @@ const daysBetween = (targetDate) => {
 };
 const calcWarnDays = (cycleDays, remainPercent) =>
   Math.max(2, Math.round((cycleDays || 0) * (remainPercent / 100)));
+
+const isoDateDiff = (fromIso, toIso) => {
+  const a = new Date(fromIso.slice(0, 10) + "T00:00:00");
+  const b = new Date(toIso.slice(0, 10) + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+};
+
+// 履歴（購入日の並び）から、平均の間隔日数を推定する。2件未満なら推定できない
+const estimateCycleFromHistory = (history) => {
+  if (!history || history.length < 2) return null;
+  const gaps = [];
+  for (let i = 1; i < history.length; i++) {
+    const g = isoDateDiff(history[i - 1], history[i]);
+    if (g > 0) gaps.push(g);
+  }
+  if (gaps.length === 0) return null;
+  const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  return Math.max(1, Math.round(avg));
+};
+
+// 「買った」を記録する際、履歴に追記し、必要なら目安日数を自動推定する
+const buildPurchaseUpdate = (item, warnPercent) => {
+  const today = todayISO();
+  const history = [...(item.history || []), nowStamp()];
+  const update = {
+    lastPurchaseDate: today,
+    extensionDays: 0,
+    history,
+  };
+  if (item.cycleDays == null) {
+    const estimated = estimateCycleFromHistory(history);
+    if (estimated != null) {
+      update.cycleDays = estimated;
+      update.warningDays = calcWarnDays(estimated, warnPercent);
+      update.estimated = true;
+    }
+  }
+  return update;
+};
 
 // モーダルを閉じる際、退場アニメーションが終わるまで少しだけ表示を保持するためのフック
 function useLingering(value, duration = 220) {
@@ -135,6 +193,18 @@ function useLingering(value, duration = 220) {
 }
 
 function statusOf(item) {
+  if (item.trackMode === "expiry" && item.expiryDate) {
+    const daysLeft = isoDateDiff(todayISO(), item.expiryDate);
+    const totalSpan = item.lastPurchaseDate ? isoDateDiff(item.lastPurchaseDate, item.expiryDate) : null;
+    const totalCycle = totalSpan && totalSpan > 0 ? totalSpan : null;
+    const warnDays = item.expiryWarnDays != null ? item.expiryWarnDays : 3;
+    if (daysLeft <= 0) return { level: "danger", daysLeft, totalCycle };
+    if (daysLeft <= warnDays) return { level: "warn", daysLeft, totalCycle };
+    return { level: "safe", daysLeft, totalCycle };
+  }
+  if (item.cycleDays == null) {
+    return { level: "unknown", daysLeft: null, totalCycle: null };
+  }
   const spareCycles = (item.spareStock || 0) * item.cycleDays;
   const totalCycle = item.cycleDays + (item.extensionDays || 0) + spareCycles;
   const due = addDays(item.lastPurchaseDate, totalCycle);
@@ -153,6 +223,30 @@ function Bottle({ level, ratio }) {
   const fillColor = palette[level];
   const h = 34;
   const fillH = Math.max(2, h * Math.max(0, Math.min(1, ratio)));
+
+  if (level === "unknown") {
+    return (
+      <svg width="26" height="40" viewBox="0 0 26 40" style={{ flexShrink: 0 }}>
+        <rect x="9" y="0" width="8" height="6" rx="1.5" fill={COLORS.bottleCap} />
+        <rect x="7" y="5" width="12" height="4" rx="1" fill={COLORS.bottleCap} />
+        <rect
+          x="2"
+          y="9"
+          width="22"
+          height="30"
+          rx="6"
+          fill={COLORS.bottleBody}
+          stroke={COLORS.bottleStroke}
+          strokeWidth="1"
+          strokeDasharray="3 3"
+        />
+        <text x="13" y="28" textAnchor="middle" fontSize="13" fontWeight="700" fill={COLORS.inkSoft}>
+          ?
+        </text>
+      </svg>
+    );
+  }
+
   return (
     <svg width="26" height="40" viewBox="0 0 26 40" style={{ flexShrink: 0 }}>
       <rect x="9" y="0" width="8" height="6" rx="1.5" fill={COLORS.bottleCap} />
@@ -332,11 +426,9 @@ function NotAuthorized({ email, darkMode, onBack }) {
 export default function App() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState(null);
-  const [authReady, setAuthReady] = useState(!isFirebaseConfigured);
-  const [unauthorizedEmail, setUnauthorizedEmail] = useState(null);
-  const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState("home");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanUnsupported, setScanUnsupported] = useState(false);
   const [manualCode, setManualCode] = useState("");
@@ -347,21 +439,34 @@ export default function App() {
   const [newCycle, setNewCycle] = useState("30");
   const [newWarn, setNewWarn] = useState("3");
   const [newGenre, setNewGenre] = useState(GENRES[0]);
+  const [newCycleUnknown, setNewCycleUnknown] = useState(false);
+  const [newTrackMode, setNewTrackMode] = useState("cycle");
+  const [newExpiryDate, setNewExpiryDate] = useState("");
+  const [newExpiryWarnDays, setNewExpiryWarnDays] = useState("3");
+  const [pendingExpiryInput, setPendingExpiryInput] = useState("");
   const [editingItem, setEditingItem] = useState(null);
   const [editingContext, setEditingContext] = useState("home"); // 'home' | 'shopping'
   const [extendingItem, setExtendingItem] = useState(null);
   const [extendDays, setExtendDays] = useState("7");
   const [toast, setToast] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [cycleAdoptPrompt, setCycleAdoptPrompt] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [yahooAppId, setYahooAppId] = useState("");
   const [warnPercent, setWarnPercent] = useState(20);
   const [lookup, setLookup] = useState({ loading: false, ok: false, error: null });
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(!isFirebaseConfigured);
+  const [unauthorizedEmail, setUnauthorizedEmail] = useState(null);
+  const [syncing, setSyncing] = useState(false);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const detectorRef = useRef(null);
+  const zxingReaderRef = useRef(null);
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -427,36 +532,6 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 
-  const saveYahooAppId = async (value) => {
-    setYahooAppId(value);
-    haptics.success();
-    try {
-      await storage.set("yahoo-app-id", value);
-    } catch (e) {
-      console.error("appidの保存に失敗しました", e);
-    }
-  };
-
-  const saveWarnPercent = async (percent) => {
-    setWarnPercent(percent);
-    haptics.success();
-    try {
-      await storage.set("warn-percent", String(percent));
-    } catch (e) {
-      console.error("設定の保存に失敗しました", e);
-    }
-  };
-
-  const toggleDarkMode = async (value) => {
-    setDarkMode(value);
-    haptics.light();
-    try {
-      await storage.set("dark-mode", String(value));
-    } catch (e) {
-      console.error("設定の保存に失敗しました", e);
-    }
-  };
-
   const handleSignIn = async () => {
     try {
       await signIn();
@@ -474,6 +549,36 @@ export default function App() {
       showToast("ログアウトしました");
     } catch (e) {
       console.error("ログアウトに失敗しました", e);
+    }
+  };
+
+  const saveYahooAppId = async (value) => {
+    setYahooAppId(value);
+    try {
+      await storage.set("yahoo-app-id", value);
+      haptics.success();
+    } catch (e) {
+      console.error("appidの保存に失敗しました", e);
+    }
+  };
+
+  const saveWarnPercent = async (percent) => {
+    setWarnPercent(percent);
+    try {
+      await storage.set("warn-percent", String(percent));
+      haptics.success();
+    } catch (e) {
+      console.error("設定の保存に失敗しました", e);
+    }
+  };
+
+  const toggleDarkMode = async (value) => {
+    setDarkMode(value);
+    haptics.light();
+    try {
+      await storage.set("dark-mode", String(value));
+    } catch (e) {
+      console.error("設定の保存に失敗しました", e);
     }
   };
 
@@ -538,6 +643,12 @@ export default function App() {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    if (zxingReaderRef.current) {
+      try {
+        zxingReaderRef.current.reset();
+      } catch (e) {}
+      zxingReaderRef.current = null;
+    }
   }, []);
 
   const closeScan = () => {
@@ -551,6 +662,11 @@ export default function App() {
     setNewCycle("30");
     setNewWarn(String(calcWarnDays(30, warnPercent)));
     setNewGenre(GENRES[0]);
+    setNewCycleUnknown(false);
+    setNewTrackMode("cycle");
+    setNewExpiryDate("");
+    setNewExpiryWarnDays("3");
+    setPendingExpiryInput("");
     setLookup({ loading: false, ok: false, error: null });
   };
 
@@ -580,40 +696,58 @@ export default function App() {
     if (!scanning) return;
     let cancelled = false;
     (async () => {
-      if (!("BarcodeDetector" in window)) {
-        setScanUnsupported(true);
+      if ("BarcodeDetector" in window) {
+        setScanUnsupported(false);
+        try {
+          detectorRef.current = new window.BarcodeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
+          });
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" },
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+          }
+          intervalRef.current = setInterval(async () => {
+            if (!videoRef.current || !detectorRef.current) return;
+            try {
+              const codes = await detectorRef.current.detect(videoRef.current);
+              if (codes && codes.length > 0) {
+                handleDetected(codes[0].rawValue);
+              }
+            } catch (e) {
+              // ignore transient detection errors
+            }
+          }, 350);
+        } catch (e) {
+          setScanUnsupported(true);
+        }
         return;
       }
-      setScanUnsupported(false);
+
+      // BarcodeDetector未対応（主にiOS Safari）: ZXingでフォールバック
       try {
-        detectorRef.current = new window.BarcodeDetector({
-          formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
-        });
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        intervalRef.current = setInterval(async () => {
-          if (!videoRef.current || !detectorRef.current) return;
-          try {
-            const codes = await detectorRef.current.detect(videoRef.current);
-            if (codes && codes.length > 0) {
-              handleDetected(codes[0].rawValue);
-            }
-          } catch (e) {
-            // ignore transient detection errors
+        const { BrowserMultiFormatReader } = await import("@zxing/browser");
+        if (cancelled) return;
+        setScanUnsupported(false);
+        const reader = new BrowserMultiFormatReader();
+        zxingReaderRef.current = reader;
+        await reader.decodeFromConstraints(
+          { video: { facingMode: "environment" } },
+          videoRef.current,
+          (result) => {
+            if (cancelled || !result) return;
+            handleDetected(result.getText());
           }
-        }, 350);
+        );
       } catch (e) {
-        setScanUnsupported(true);
+        if (!cancelled) setScanUnsupported(true);
       }
     })();
     return () => {
@@ -630,19 +764,54 @@ export default function App() {
     setNewWarn(String(calcWarnDays(parseInt(newCycle, 10) || 30, warnPercent)));
   };
 
+  const openManualRegister = () => {
+    haptics.light();
+    setScanning(true);
+    setUnknownStep("new");
+    setScannedCode(null);
+    setNewWarn(String(calcWarnDays(parseInt(newCycle, 10) || 30, warnPercent)));
+  };
+
   const submitManualCode = () => {
     if (!manualCode.trim()) return;
     handleDetected(manualCode.trim());
   };
 
+  const applyPurchase = (item, extraFields = {}) => {
+    if (item.trackMode === "expiry") {
+      const history = [...(item.history || []), nowStamp()];
+      const next = items.map((it) => (it.id === item.id ? { ...it, lastPurchaseDate: todayISO(), history, ...extraFields } : it));
+      persist(next);
+      haptics.success();
+      return;
+    }
+    const provisional = buildPurchaseUpdate(item, warnPercent);
+    const isNewlyEstimated = item.cycleDays == null && provisional.cycleDays != null;
+    if (isNewlyEstimated) {
+      const { cycleDays, warningDays, estimated, ...rest } = provisional;
+      const next = items.map((it) => (it.id === item.id ? { ...it, ...rest, ...extraFields } : it));
+      persist(next);
+      setCycleAdoptPrompt({
+        itemId: item.id,
+        itemName: item.name,
+        estimatedCycle: cycleDays,
+        estimatedWarn: warningDays,
+      });
+    } else {
+      const next = items.map((it) => (it.id === item.id ? { ...it, ...provisional, ...extraFields } : it));
+      persist(next);
+    }
+    haptics.success();
+  };
+
   const confirmKnownReset = () => {
     if (!pendingKnown) return;
-    const next = items.map((it) =>
-      it.id === pendingKnown.id ? { ...it, lastPurchaseDate: todayISO(), extensionDays: 0 } : it
+    if (pendingKnown.trackMode === "expiry" && !pendingExpiryInput) return;
+    applyPurchase(
+      pendingKnown,
+      pendingKnown.trackMode === "expiry" ? { expiryDate: pendingExpiryInput } : {}
     );
-    persist(next);
     showToast(`「${pendingKnown.name}」を補充として記録しました`);
-    haptics.success();
     closeScan();
   };
 
@@ -653,18 +822,26 @@ export default function App() {
   };
 
   const registerNewItem = () => {
-    if (!newName.trim() || !scannedCode) return;
+    if (!newName.trim()) return;
+    if (newTrackMode === "expiry" && !newExpiryDate) return;
+    const today = todayISO();
+    const isExpiry = newTrackMode === "expiry";
     const item = {
       id: uid(),
       name: newName.trim(),
       genre: newGenre || "その他",
-      barcodes: [scannedCode],
-      cycleDays: Math.max(1, parseInt(newCycle, 10) || 30),
-      warningDays: Math.max(0, parseInt(newWarn, 10) || 3),
-      lastPurchaseDate: todayISO(),
+      barcodes: scannedCode ? [scannedCode] : [],
+      cycleDays: isExpiry || newCycleUnknown ? null : Math.max(1, parseInt(newCycle, 10) || 30),
+      warningDays: isExpiry || newCycleUnknown ? null : Math.max(0, parseInt(newWarn, 10) || 3),
+      trackMode: newTrackMode,
+      expiryDate: isExpiry ? newExpiryDate : null,
+      expiryWarnDays: isExpiry ? Math.max(0, parseInt(newExpiryWarnDays, 10) || 3) : null,
+      lastPurchaseDate: today,
       extensionDays: 0,
       spareStock: 0,
       warnMode: "percent",
+      estimated: false,
+      history: [nowStamp()],
     };
     persist([...items, item]);
     showToast(`「${item.name}」を登録しました`);
@@ -673,7 +850,7 @@ export default function App() {
   };
 
   const handleRegisterClick = () => {
-    if (!newName.trim() || !scannedCode) return;
+    if (!newName.trim()) return;
     const isDuplicate = items.some((it) => it.name.trim().toLowerCase() === newName.trim().toLowerCase());
     if (isDuplicate) {
       setUnknownStep("duplicateConfirm");
@@ -683,24 +860,18 @@ export default function App() {
   };
 
   const linkToExisting = (itemId) => {
-    const next = items.map((it) =>
-      it.id === itemId
-        ? { ...it, barcodes: [...new Set([...it.barcodes, scannedCode])], lastPurchaseDate: todayISO(), extensionDays: 0 }
-        : it
-    );
-    persist(next);
     const target = items.find((it) => it.id === itemId);
-    showToast(`「${target?.name}」の買い替えとして記録しました`);
-    haptics.success();
+    if (!target) return;
+    applyPurchase(target, { barcodes: [...new Set([...target.barcodes, scannedCode])] });
+    showToast(`「${target.name}」の買い替えとして記録しました`);
     closeScan();
   };
 
-  const resetCycleManually = (id) => {
-    const next = items.map((it) => (it.id === id ? { ...it, lastPurchaseDate: todayISO(), extensionDays: 0 } : it));
-    persist(next);
+  const resetCycleManually = (id, newExpiryDateValue) => {
     const target = items.find((it) => it.id === id);
-    showToast(`「${target?.name}」を使い切りリセットしました`);
-    haptics.success();
+    if (!target) return;
+    applyPurchase(target, target.trackMode === "expiry" ? { expiryDate: newExpiryDateValue || target.expiryDate } : {});
+    showToast(`「${target.name}」を使い切りリセットしました`);
   };
 
   const openEditFromHome = (item) => {
@@ -738,21 +909,51 @@ export default function App() {
     haptics.success();
   };
 
+  const deleteHistoryEntries = (itemId, dates) => {
+    haptics.warning();
+    const next = items.map((it) =>
+      it.id === itemId ? { ...it, history: (it.history || []).filter((d) => !dates.includes(d)) } : it
+    );
+    persist(next);
+    showToast(`履歴を${dates.length}件削除しました`);
+  };
+
+  const adoptEstimatedCycle = () => {
+    if (!cycleAdoptPrompt) return;
+    const { itemId, estimatedCycle, estimatedWarn } = cycleAdoptPrompt;
+    const next = items.map((it) =>
+      it.id === itemId ? { ...it, cycleDays: estimatedCycle, warningDays: estimatedWarn, estimated: true } : it
+    );
+    persist(next);
+    haptics.success();
+    setCycleAdoptPrompt(null);
+  };
+
+  const declineEstimatedCycle = () => {
+    haptics.light();
+    setCycleAdoptPrompt(null);
+  };
+
   const [displayEditingItem, editingClosing] = useLingering(editingItem);
   const [displayExtendingItem, extendingClosing] = useLingering(extendingItem);
   const [displayScanning, scanningClosing] = useLingering(scanning);
   const [displaySettings, settingsClosing] = useLingering(showSettings);
+  const [displayHistory, historyClosing] = useLingering(showHistory);
+  const [displayCalendar, calendarClosing] = useLingering(showCalendar);
+  const [displayCycleAdopt, cycleAdoptClosing] = useLingering(cycleAdoptPrompt);
 
   const enriched = items
     .map((it) => {
       const status = statusOf(it);
-      const ratio = status.totalCycle > 0 ? status.daysLeft / status.totalCycle : 0;
+      const ratio = status.level === "unknown" ? Infinity : status.totalCycle > 0 ? status.daysLeft / status.totalCycle : 0;
       return { ...it, ...status, ratio };
     })
     .sort((a, b) => a.ratio - b.ratio);
-  const urgentCount = enriched.filter((it) => it.level !== "safe").length;
+  const urgentCount = enriched.filter((it) => it.level !== "safe" && it.level !== "unknown").length;
+  const searchedEnriched = searchQuery.trim()
+    ? enriched.filter((it) => it.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : enriched;
 
-  // Firebaseが設定されている場合のみ、ログインするまで中身を一切表示しない
   if (isFirebaseConfigured && unauthorizedEmail) {
     return (
       <NotAuthorized
@@ -797,6 +998,8 @@ export default function App() {
         @keyframes modalSlideDown { from { transform: translateY(0); } to { transform: translateY(100%); } }
         @keyframes overlayFadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes overlayFadeOut { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes pageSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes pageSlideOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
         @keyframes bounceScale { 0% { transform: scale(1); } 35% { transform: scale(1.35); } 65% { transform: scale(0.92); } 100% { transform: scale(1); } }
         @keyframes dropDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes dropUp { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
@@ -823,26 +1026,100 @@ export default function App() {
             日用品を使い切る前に、そっと教えます
           </p>
         </div>
-        <button
-          onClick={() => setShowSettings(true)}
-          style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6, marginTop: 2 }}
-        >
-          <Settings size={22} />
-        </button>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            onClick={() => {
+              haptics.light();
+              setShowCalendar(true);
+            }}
+            style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6, marginTop: 2 }}
+          >
+            <CalendarIcon size={22} />
+          </button>
+          <button
+            onClick={() => {
+              haptics.light();
+              setShowHistory(true);
+            }}
+            style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6, marginTop: 2 }}
+          >
+            <History size={22} />
+          </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6, marginTop: 2 }}
+          >
+            <Settings size={22} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, padding: "0 16px 96px", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 6 }}>
+          {tab === "home" ? (
+            <button
+              type="button"
+              onClick={openManualRegister}
+              style={{
+                border: "none",
+                background: "none",
+                color: COLORS.inkSoft,
+                fontSize: 12,
+                fontWeight: 700,
+                padding: 4,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <Plus size={15} /> バーコードなしで追加
+            </button>
+          ) : (
+            <div />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              haptics.light();
+              setSearchOpen((o) => {
+                const next = !o;
+                if (!next) setSearchQuery("");
+                return next;
+              });
+            }}
+            style={{
+              border: "none",
+              background: "none",
+              color: searchOpen ? COLORS.navy : COLORS.inkSoft,
+              padding: 4,
+              display: "flex",
+            }}
+          >
+            <Search size={19} />
+          </button>
+        </div>
+        {searchOpen && (
+          <div style={{ animation: "dropDown 0.2s ease", marginBottom: 4 }}>
+            <input
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="商品名で検索"
+              style={{ ...inputStyle, marginBottom: 10 }}
+            />
+          </div>
+        )}
         {loading ? (
           <div style={{ textAlign: "center", padding: "60px 0", color: COLORS.inkSoft }}>読み込み中…</div>
         ) : tab === "home" ? (
           <HomeList
-            items={enriched}
+            items={searchedEnriched}
             onEdit={openEditFromHome}
           />
         ) : (
           <ShoppingList
-            items={enriched}
+            items={searchedEnriched}
             onEdit={openEditFromShopping}
             onManualReset={resetCycleManually}
             onExtend={setExtendingItem}
@@ -946,6 +1223,8 @@ export default function App() {
           pendingKnown={pendingKnown}
           onConfirmKnown={confirmKnownReset}
           onCancelKnown={cancelKnownReset}
+          pendingExpiryInput={pendingExpiryInput}
+          onPendingExpiryChange={setPendingExpiryInput}
           items={items}
           newName={newName}
           setNewName={setNewName}
@@ -955,6 +1234,24 @@ export default function App() {
           setNewWarn={setNewWarn}
           newGenre={newGenre}
           setNewGenre={setNewGenre}
+          newCycleUnknown={newCycleUnknown}
+          onGoUnknownConfirm={() => setUnknownStep("cycleUnknownConfirm")}
+          onRevertUnknown={() => setNewCycleUnknown(false)}
+          onConfirmUnknown={() => {
+            setNewCycleUnknown(true);
+            setUnknownStep("new");
+          }}
+          onBackToNewFromUnknown={() => setUnknownStep("new")}
+          newTrackMode={newTrackMode}
+          newExpiryDate={newExpiryDate}
+          setNewExpiryDate={setNewExpiryDate}
+          newExpiryWarnDays={newExpiryWarnDays}
+          setNewExpiryWarnDays={setNewExpiryWarnDays}
+          onSetExpiryMode={() => {
+            setNewCycleUnknown(false);
+            setNewTrackMode("expiry");
+          }}
+          onRevertTrackMode={() => setNewTrackMode("cycle")}
           lookup={lookup}
           onRegisterNew={handleRegisterClick}
           onConfirmDuplicate={registerNewItem}
@@ -1023,6 +1320,59 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      {/* Calendar page */}
+      {displayCalendar && (
+        <CalendarPage
+          closing={calendarClosing}
+          items={enriched}
+          onBack={() => setShowCalendar(false)}
+          onSelectItem={(it) => {
+            setShowCalendar(false);
+            openEditFromHome(it);
+          }}
+        />
+      )}
+
+      {/* Scan history page */}
+      {displayHistory && (
+        <HistoryPage
+          closing={historyClosing}
+          items={enriched}
+          onBack={() => setShowHistory(false)}
+          onDeleteEntries={deleteHistoryEntries}
+        />
+      )}
+
+      {/* Cycle estimation adoption prompt */}
+      {displayCycleAdopt && (
+        <ModalShell onClose={declineEstimatedCycle} closing={cycleAdoptClosing} title="サイクルを設定しますか？">
+          <div
+            style={{
+              background: COLORS.safeBg,
+              border: `1px solid ${COLORS.safe}`,
+              borderRadius: 14,
+              padding: "16px 14px",
+              marginBottom: 16,
+            }}
+          >
+            <div style={{ fontWeight: 900, fontSize: 16, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.safe }}>
+              前回から {displayCycleAdopt.estimatedCycle} 日で使い切りました
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 8, lineHeight: 1.7 }}>
+              「{displayCycleAdopt.itemName}」を、次回からこのサイクル（{displayCycleAdopt.estimatedCycle}日）で管理しますか？
+              <br />
+              まだわからないままにする場合は、次にスキャンした時にまた確認します。
+            </div>
+          </div>
+          <button style={{ ...primaryBtn, marginBottom: 10 }} onClick={adoptEstimatedCycle}>
+            このサイクル（{displayCycleAdopt.estimatedCycle}日）を使う
+          </button>
+          <button style={secondaryBtn} onClick={declineEstimatedCycle}>
+            まだわからないままにする
+          </button>
+        </ModalShell>
+      )}
     </div>
   );
 }
@@ -1073,11 +1423,18 @@ function NavButton({ icon, label, active, onClick, badge }) {
 function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
   const ratio = item.totalCycle > 0 ? item.daysLeft / item.totalCycle : 0;
   const label =
-    item.daysLeft > 0 ? `あと ${item.daysLeft} 日` : item.daysLeft === 0 ? "本日が目安" : `${-item.daysLeft} 日超過`;
+    item.level === "unknown"
+      ? "計測中"
+      : item.daysLeft > 0
+      ? `あと ${item.daysLeft} 日`
+      : item.daysLeft === 0
+      ? "本日が目安"
+      : `${-item.daysLeft} 日超過`;
   const statusColors = {
     safe: { fg: COLORS.safe, bg: COLORS.safeBg },
     warn: { fg: COLORS.warn, bg: COLORS.warnBg },
     danger: { fg: COLORS.danger, bg: COLORS.dangerBg },
+    unknown: { fg: COLORS.inkSoft, bg: COLORS.bg },
   }[item.level];
 
   return (
@@ -1138,7 +1495,7 @@ function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
           </div>
         )}
       </div>
-      {onExtend && (
+      {onExtend && item.level !== "unknown" && item.trackMode !== "expiry" && (
         <button
           onClick={() => onExtend(item)}
           title="期限を延長する"
@@ -1303,8 +1660,9 @@ function ShoppingList({ items, onEdit, onManualReset, onExtend }) {
       />
     );
   }
-  const urgent = items.filter((it) => it.level !== "safe");
+  const urgent = items.filter((it) => it.level === "warn" || it.level === "danger");
   const safe = items.filter((it) => it.level === "safe");
+  const unknown = items.filter((it) => it.level === "unknown");
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
@@ -1319,7 +1677,19 @@ function ShoppingList({ items, onEdit, onManualReset, onExtend }) {
           <ItemCard key={it.id} item={it} onEdit={onEdit} onManualReset={onManualReset} onExtend={onExtend} showMemo />
         ))
       )}
-      {urgent.length > 0 && safe.length > 0 && <div style={{ height: 22 }} />}
+      {unknown.length > 0 && (
+        <div style={{ marginTop: urgent.length > 0 ? 22 : 0 }}>
+          <GenreAccordion genre="目安日数未設定" count={unknown.length} defaultOpen={false}>
+            <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
+              次にスキャンすると、自動で目安日数が計算されます。
+            </p>
+            {unknown.map((it) => (
+              <ItemCard key={it.id} item={it} onEdit={onEdit} onManualReset={onManualReset} />
+            ))}
+          </GenreAccordion>
+        </div>
+      )}
+      {(urgent.length > 0 || unknown.length > 0) && safe.length > 0 && <div style={{ height: 22 }} />}
       {safe.length > 0 && (
         <div style={{ fontSize: 11, color: "#9BA69B", fontWeight: 700, marginBottom: 4, paddingLeft: 4 }}>
           まだ余裕があるもの
@@ -1328,6 +1698,454 @@ function ShoppingList({ items, onEdit, onManualReset, onExtend }) {
       {safe.map((it) => (
         <CompactItemRow key={it.id} item={it} onEdit={onEdit} onExtend={onExtend} />
       ))}
+    </div>
+  );
+}
+
+const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
+function CalendarPage({ items, onBack, closing, onSelectItem }) {
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const base = new Date();
+  const viewDate = new Date(base.getFullYear(), base.getMonth() + monthOffset, 1);
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const todayStr = formatDateObj(new Date());
+
+  const dueMap = {};
+  items.forEach((it) => {
+    let dueDateStr = null;
+    if (it.trackMode === "expiry" && it.expiryDate) {
+      dueDateStr = it.expiryDate;
+    } else if (it.cycleDays != null) {
+      const spareCycles = (it.spareStock || 0) * it.cycleDays;
+      const totalCycle = it.cycleDays + (it.extensionDays || 0) + spareCycles;
+      const due = addDays(it.lastPurchaseDate, totalCycle);
+      dueDateStr = formatDateObj(due);
+    }
+    if (dueDateStr) {
+      if (!dueMap[dueDateStr]) dueMap[dueDateStr] = [];
+      dueMap[dueDateStr].push(it);
+    }
+  });
+
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const changeMonth = (delta) => {
+    haptics.light();
+    setMonthOffset((m) => m + delta);
+    setSelectedDate(null);
+  };
+
+  const selectDate = (dateStr) => {
+    if (!dueMap[dateStr]) return;
+    haptics.medium();
+    setSelectedDate((d) => (d === dateStr ? null : dateStr));
+  };
+
+  const selectedItems = selectedDate ? dueMap[selectedDate] || [] : [];
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: COLORS.bg,
+        zIndex: 90,
+        display: "flex",
+        flexDirection: "column",
+        maxWidth: 480,
+        margin: "0 auto",
+        animation: closing ? "pageSlideOut 0.25s ease forwards" : "pageSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1)",
+      }}
+    >
+      <div
+        style={{
+          padding: "20px 16px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          borderBottom: `1px solid ${COLORS.line}`,
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            haptics.light();
+            onBack();
+          }}
+          style={{ border: "none", background: "none", color: COLORS.ink, padding: 4, display: "flex" }}
+        >
+          <ChevronLeft size={24} />
+        </button>
+        <div style={{ fontWeight: 900, fontSize: 17, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.navy }}>
+          カレンダー
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 40px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <button
+            type="button"
+            onClick={() => changeMonth(-1)}
+            style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6 }}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div style={{ fontWeight: 900, fontSize: 16, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.navy }}>
+            {year}年{month + 1}月
+          </div>
+          <button
+            type="button"
+            onClick={() => changeMonth(1)}
+            style={{ border: "none", background: "none", color: COLORS.inkSoft, padding: 6 }}
+          >
+            <ChevronLeft size={20} style={{ transform: "rotate(180deg)" }} />
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 6 }}>
+          {WEEKDAY_LABELS.map((w) => (
+            <div key={w} style={{ textAlign: "center", fontSize: 11, color: COLORS.inkSoft, fontWeight: 700 }}>
+              {w}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+          {cells.map((d, i) => {
+            if (d == null) return <div key={i} />;
+            const dateStr = formatDateObj(new Date(year, month, d));
+            const dayItems = dueMap[dateStr] || [];
+            const isToday = dateStr === todayStr;
+            const isSelected = dateStr === selectedDate;
+            const worst = dayItems.reduce((acc, it) => {
+              const order = { danger: 3, warn: 2, safe: 1 };
+              return (order[it.level] || 0) > (order[acc] || 0) ? it.level : acc;
+            }, null);
+            const dotColor = worst === "danger" ? COLORS.danger : worst === "warn" ? COLORS.warn : worst === "safe" ? COLORS.safe : null;
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => selectDate(dateStr)}
+                style={{
+                  aspectRatio: "1",
+                  border: isSelected ? `2px solid ${COLORS.navy}` : isToday ? `1px solid ${COLORS.navy}` : "1px solid transparent",
+                  borderRadius: 10,
+                  background: isSelected ? COLORS.safeBg : "transparent",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 3,
+                  cursor: dayItems.length > 0 ? "pointer" : "default",
+                }}
+              >
+                <span style={{ fontSize: 12.5, fontWeight: isToday ? 900 : 500, color: dayItems.length > 0 ? COLORS.ink : COLORS.inkSoft }}>
+                  {d}
+                </span>
+                {dotColor && (
+                  <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, display: "block" }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedDate && (
+          <div key={selectedDate} style={{ marginTop: 20, animation: "dropDown 0.2s ease" }}>
+            <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8, fontWeight: 700 }}>
+              {selectedDate} に切れそうなもの（{selectedItems.length}件）
+            </div>
+            {selectedItems.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                onClick={() => {
+                  haptics.medium();
+                  onSelectItem(it);
+                }}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 4px",
+                  borderBottom: `1px solid ${COLORS.line}`,
+                  background: "none",
+                  border: "none",
+                }}
+              >
+                <Bottle level={it.level} ratio={it.totalCycle > 0 ? it.daysLeft / it.totalCycle : 0} />
+                <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14 }}>{it.name}</div>
+                <ChevronRight size={16} color={COLORS.inkSoft} />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
+  const [detailId, setDetailId] = useState(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const scannedItems = items
+    .filter((it) => (it.history || []).length > 0)
+    .slice()
+    .sort((a, b) => {
+      const aLast = a.history[a.history.length - 1];
+      const bLast = b.history[b.history.length - 1];
+      return bLast.localeCompare(aLast);
+    });
+
+  const detailItem = detailId ? items.find((it) => it.id === detailId) : null;
+
+  const toggleSelect = (date) => {
+    haptics.light();
+    setSelected((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
+  };
+
+  const openDetail = (id) => {
+    haptics.medium();
+    setDetailId(id);
+    setSelecting(false);
+    setSelected([]);
+  };
+
+  const backToList = () => {
+    haptics.light();
+    setDetailId(null);
+    setSelecting(false);
+    setSelected([]);
+  };
+
+  const handleBack = () => {
+    haptics.light();
+    if (detailId) {
+      backToList();
+    } else {
+      onBack();
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: COLORS.bg,
+        zIndex: 90,
+        display: "flex",
+        flexDirection: "column",
+        maxWidth: 480,
+        margin: "0 auto",
+        animation: closing ? "pageSlideOut 0.25s ease forwards" : "pageSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1)",
+      }}
+    >
+      <div
+        style={{
+          padding: "20px 16px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          borderBottom: `1px solid ${COLORS.line}`,
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={handleBack}
+          style={{ border: "none", background: "none", color: COLORS.ink, padding: 4, display: "flex" }}
+        >
+          <ChevronLeft size={24} />
+        </button>
+        <div style={{ fontWeight: 900, fontSize: 17, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.navy }}>
+          {detailItem ? detailItem.name : "スキャン履歴"}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px 40px" }}>
+        <div key={detailItem ? `detail-${detailItem.id}` : "list"} style={{ animation: "dropDown 0.22s ease" }}>
+          {detailItem ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <Bottle
+                  level={detailItem.level}
+                  ratio={detailItem.totalCycle > 0 ? detailItem.daysLeft / detailItem.totalCycle : 0}
+                />
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color:
+                      detailItem.level === "unknown"
+                        ? COLORS.inkSoft
+                        : detailItem.level === "safe"
+                        ? COLORS.safe
+                        : detailItem.level === "warn"
+                        ? COLORS.warn
+                        : COLORS.danger,
+                  }}
+                >
+                  {detailItem.level === "unknown"
+                    ? "計測中"
+                    : detailItem.daysLeft > 0
+                    ? `あと ${detailItem.daysLeft} 日`
+                    : detailItem.daysLeft === 0
+                    ? "本日が目安"
+                    : `${-detailItem.daysLeft} 日超過`}
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: COLORS.inkSoft }}>
+                  スキャン履歴（{(detailItem.history || []).length}件）
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.light();
+                    setSelecting((s) => !s);
+                    setSelected([]);
+                  }}
+                  style={{ border: "none", background: "none", color: COLORS.navy, fontSize: 12, fontWeight: 700, padding: 0 }}
+                >
+                  {selecting ? "キャンセル" : "選択"}
+                </button>
+              </div>
+              {[...(detailItem.history || [])].sort().map((stamp, i, history) => {
+                const gap = i > 0 ? isoDateDiff(history[i - 1], stamp) : null;
+                const checked = selected.includes(stamp);
+                return (
+                  <div
+                    key={stamp}
+                    onClick={() => selecting && toggleSelect(stamp)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 4px",
+                      borderBottom: i < history.length - 1 ? `1px solid ${COLORS.line}` : "none",
+                      cursor: selecting ? "pointer" : "default",
+                    }}
+                  >
+                    {selecting && (
+                      <span key={checked} style={{ display: "inline-flex", animation: "bounceScale 0.25s ease" }}>
+                        {checked ? <CheckSquare size={18} color={COLORS.navy} /> : <Square size={18} color={COLORS.inkSoft} />}
+                      </span>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{formatStamp(stamp)}</div>
+                      {gap != null && <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>前回から{gap}日</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              {selecting && selected.length > 0 && (
+                <button
+                  style={{
+                    ...primaryBtn,
+                    marginTop: 16,
+                    background: COLORS.danger,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                  onClick={() => {
+                    haptics.warning();
+                    setConfirmingDelete(true);
+                  }}
+                >
+                  <Trash2 size={16} /> 選択した{selected.length}件を削除
+                </button>
+              )}
+            </>
+          ) : scannedItems.length === 0 ? (
+            <p style={{ fontSize: 13, color: COLORS.inkSoft }}>まだスキャン履歴がありません。</p>
+          ) : (
+            scannedItems.map((it) => {
+              const h = it.history || [];
+              const last = h[h.length - 1];
+              const ratio = it.totalCycle > 0 ? it.daysLeft / it.totalCycle : 0;
+              return (
+                <button
+                  key={it.id}
+                  type="button"
+                  onClick={() => openDetail(it.id)}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "12px 4px",
+                    borderBottom: `1px solid ${COLORS.line}`,
+                    background: "none",
+                    border: "none",
+                  }}
+                >
+                  <Bottle level={it.level} ratio={ratio} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>{it.name}</div>
+                    <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
+                      {h.length}回スキャン・最終 {formatStamp(last)}
+                    </div>
+                  </div>
+                  <ChevronRight size={18} color={COLORS.inkSoft} />
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {confirmingDelete && (
+        <ModalShell onClose={() => setConfirmingDelete(false)} title="履歴を削除しますか？">
+          <div
+            style={{
+              background: COLORS.dangerBg,
+              border: `1px solid ${COLORS.danger}`,
+              borderRadius: 14,
+              padding: "16px 14px",
+              marginBottom: 16,
+            }}
+          >
+            <div style={{ fontWeight: 900, fontSize: 16, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.danger }}>
+              選択した{selected.length}件を削除します
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6 }}>この操作は取り消せません。</div>
+          </div>
+          <button
+            style={{ ...primaryBtn, marginBottom: 10, background: COLORS.danger }}
+            onClick={() => {
+              onDeleteEntries(detailId, selected);
+              setSelected([]);
+              setSelecting(false);
+              setConfirmingDelete(false);
+            }}
+          >
+            削除する
+          </button>
+          <button style={secondaryBtn} onClick={() => setConfirmingDelete(false)}>
+            キャンセル
+          </button>
+        </ModalShell>
+      )}
     </div>
   );
 }
@@ -1654,6 +2472,8 @@ function ScanModal(props) {
     pendingKnown,
     onConfirmKnown,
     onCancelKnown,
+    pendingExpiryInput,
+    onPendingExpiryChange,
     items,
     newName,
     setNewName,
@@ -1663,6 +2483,18 @@ function ScanModal(props) {
     setNewWarn,
     newGenre,
     setNewGenre,
+    newCycleUnknown,
+    onGoUnknownConfirm,
+    onRevertUnknown,
+    onConfirmUnknown,
+    onBackToNewFromUnknown,
+    newTrackMode,
+    newExpiryDate,
+    setNewExpiryDate,
+    newExpiryWarnDays,
+    setNewExpiryWarnDays,
+    onSetExpiryMode,
+    onRevertTrackMode,
     lookup,
     onRegisterNew,
     onConfirmDuplicate,
@@ -1673,6 +2505,7 @@ function ScanModal(props) {
   } = props;
 
   if (pendingKnown) {
+    const isExpiry = pendingKnown.trackMode === "expiry";
     return (
       <ModalShell onClose={onClose} closing={closing} title="この内容で記録しますか？">
         <div
@@ -1689,10 +2522,28 @@ function ScanModal(props) {
             {pendingKnown.name}
           </div>
           <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6 }}>
-            「買った」として記録し、使い切りサイクルをリセットします
+            {isExpiry
+              ? "「買った」として記録します。新しいパッケージの期限日を入力してください"
+              : "「買った」として記録し、使い切りサイクルをリセットします"}
           </div>
         </div>
-        <button style={{ ...primaryBtn, marginBottom: 10 }} onClick={onConfirmKnown}>
+        {isExpiry && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>新しい賞味/使用期限日</label>
+            <input
+              type="date"
+              style={{ ...inputStyle, marginBottom: 0 }}
+              value={pendingExpiryInput}
+              onChange={(e) => onPendingExpiryChange(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
+        <button
+          style={{ ...primaryBtn, marginBottom: 10 }}
+          onClick={onConfirmKnown}
+          disabled={isExpiry && !pendingExpiryInput}
+        >
           この内容で記録する
         </button>
         <button style={secondaryBtn} onClick={onCancelKnown}>
@@ -1756,14 +2607,168 @@ function ScanModal(props) {
             </option>
           ))}
         </select>
-        <CyclePicker days={parseInt(newCycle, 10) || 0} onChange={setNewCycle} />
-        <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: -6, marginBottom: 14 }}>
-          買い物リストに追加するタイミングは設定の一括ルールが自動で適用されます。この商品だけ個別に調整したい場合は、在庫一覧から商品を選んで設定できます。
-        </p>
-        <button style={primaryBtn} onClick={onRegisterNew} disabled={!newName.trim()}>
+        {newTrackMode === "expiry" ? (
+          <div
+            style={{
+              background: COLORS.card,
+              border: `1px solid ${COLORS.line}`,
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 14,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.navy, marginBottom: 8 }}>
+              消費期限で管理する
+            </div>
+            <label style={labelStyle}>賞味/使用期限日</label>
+            <input
+              type="date"
+              style={inputStyle}
+              value={newExpiryDate}
+              onChange={(e) => setNewExpiryDate(e.target.value)}
+            />
+            <label style={labelStyle}>何日前から買い物リストに入れるか</label>
+            <input
+              type="number"
+              style={{ ...inputStyle, marginBottom: 0 }}
+              value={newExpiryWarnDays}
+              onChange={(e) => setNewExpiryWarnDays(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                haptics.light();
+                onRevertTrackMode();
+              }}
+              style={{ border: "none", background: "none", color: COLORS.inkSoft, fontSize: 12, fontWeight: 700, padding: 0, marginTop: 10 }}
+            >
+              サイクル管理に戻す
+            </button>
+          </div>
+        ) : newCycleUnknown ? (
+          <div
+            style={{
+              background: COLORS.warnBg,
+              border: `1px solid ${COLORS.warn}`,
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 14,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.warn, marginBottom: 4 }}>
+              使い切るまでの目安：わからない
+            </div>
+            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, lineHeight: 1.6, marginBottom: 8 }}>
+              次回このバーコードをスキャンした時から、実際の間隔をもとに自動で計算されます。それまでは買い物リストには表示されません。
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                haptics.light();
+                onRevertUnknown();
+              }}
+              style={{ border: "none", background: "none", color: COLORS.warn, fontSize: 12, fontWeight: 700, padding: 0 }}
+            >
+              やっぱり日数を入力する
+            </button>
+          </div>
+        ) : (
+          <>
+            <CyclePicker days={parseInt(newCycle, 10) || 0} onChange={setNewCycle} />
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  haptics.light();
+                  onGoUnknownConfirm();
+                }}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  border: `1px solid ${COLORS.line}`,
+                  borderRadius: 10,
+                  background: COLORS.card,
+                  color: COLORS.inkSoft,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  padding: "11px 0",
+                }}
+              >
+                <HelpCircle size={15} /> わからない
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  haptics.light();
+                  onSetExpiryMode();
+                }}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  border: `1px solid ${COLORS.line}`,
+                  borderRadius: 10,
+                  background: COLORS.card,
+                  color: COLORS.inkSoft,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  padding: "11px 0",
+                }}
+              >
+                <CalendarIcon size={15} /> 消費期限で管理
+              </button>
+            </div>
+          </>
+        )}
+        {newTrackMode !== "expiry" && !newCycleUnknown && (
+          <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: -6, marginBottom: 14 }}>
+            買い物リストに追加するタイミングは設定の一括ルールが自動で適用されます。この商品だけ個別に調整したい場合は、在庫一覧から商品を選んで設定できます。
+          </p>
+        )}
+        <button
+          style={primaryBtn}
+          onClick={onRegisterNew}
+          disabled={!newName.trim() || (newTrackMode === "expiry" && !newExpiryDate)}
+        >
           登録する
         </button>
-        <button style={{ ...secondaryBtn, marginTop: 10 }} onClick={onBackToChoose}>
+        <button style={{ ...secondaryBtn, marginTop: 10 }} onClick={scannedCode ? onBackToChoose : onClose}>
+          {scannedCode ? "戻る" : "キャンセル"}
+        </button>
+      </ModalShell>
+    );
+  }
+
+  if (unknownStep === "cycleUnknownConfirm") {
+    return (
+      <ModalShell onClose={onClose} closing={closing} title="使い切るまでの目安がわからない場合">
+        <div
+          style={{
+            background: COLORS.warnBg,
+            border: `1px solid ${COLORS.warn}`,
+            borderRadius: 14,
+            padding: "16px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ fontWeight: 900, fontSize: 16, fontFamily: "'Zen Maru Gothic', sans-serif", color: COLORS.warn }}>
+            わからないまま登録しますか？
+          </div>
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 8, lineHeight: 1.7 }}>
+            次回このバーコードをスキャンした時点から、実際の間隔をもとに自動で目安日数が計算されます。
+            <br />
+            それまでは日数が確定しないため、買い物リストには表示されません。
+          </div>
+        </div>
+        <button style={{ ...primaryBtn, marginBottom: 10 }} onClick={onConfirmUnknown}>
+          わからないまま登録する
+        </button>
+        <button style={secondaryBtn} onClick={onBackToNewFromUnknown}>
           戻る
         </button>
       </ModalShell>
@@ -1959,8 +2964,10 @@ function FieldSection({ title, children }) {
 function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExtend, showBuyButton, closing }) {
   const [name, setName] = useState(item.name);
   const [genre, setGenre] = useState(item.genre || "その他");
-  const [cycleDays, setCycleDays] = useState(String(item.cycleDays));
-  const [warningDays, setWarningDays] = useState(String(item.warningDays));
+  const [cycleDays, setCycleDays] = useState(item.cycleDays != null ? String(item.cycleDays) : "30");
+  const [warningDays, setWarningDays] = useState(
+    item.warningDays != null ? String(item.warningDays) : String(calcWarnDays(item.cycleDays ?? 30, 20))
+  );
   const [barcodes, setBarcodes] = useState(item.barcodes);
   const [barcodesOpen, setBarcodesOpen] = useState(false);
   const [memo, setMemo] = useState(item.memo || "");
@@ -1975,6 +2982,12 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
   })();
   const [percent, setPercent] = useState(initialPercent);
   const [warnMode, setWarnMode] = useState(item.warnMode || "percent");
+  const [trackMode, setTrackMode] = useState(item.trackMode || "cycle");
+  const [expiryDate, setExpiryDate] = useState(item.expiryDate || "");
+  const [expiryWarnDays, setExpiryWarnDays] = useState(
+    item.expiryWarnDays != null ? String(item.expiryWarnDays) : "3"
+  );
+  const [confirmExpiryInput, setConfirmExpiryInput] = useState("");
 
   const cycleNum = () => parseInt(cycleDays, 10) || item.cycleDays;
 
@@ -2005,6 +3018,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
   };
 
   if (confirming) {
+    const isExpiry = item.trackMode === "expiry";
     return (
       <ModalShell onClose={onClose} closing={closing} title="この内容で記録しますか？">
         <div
@@ -2021,13 +3035,28 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             {item.name}
           </div>
           <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6 }}>
-            「買った」として記録し、使い切りサイクルをリセットします
+            {isExpiry
+              ? "「買った」として記録します。新しいパッケージの期限日を入力してください"
+              : "「買った」として記録し、使い切りサイクルをリセットします"}
           </div>
         </div>
+        {isExpiry && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>新しい賞味/使用期限日</label>
+            <input
+              type="date"
+              style={{ ...inputStyle, marginBottom: 0 }}
+              value={confirmExpiryInput}
+              onChange={(e) => setConfirmExpiryInput(e.target.value)}
+              autoFocus
+            />
+          </div>
+        )}
         <button
           style={{ ...primaryBtn, marginBottom: 10 }}
+          disabled={isExpiry && !confirmExpiryInput}
           onClick={() => {
-            onManualReset(item.id);
+            onManualReset(item.id, isExpiry ? confirmExpiryInput : undefined);
             onClose();
           }}
         >
@@ -2123,104 +3152,175 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
       </FieldSection>
 
       <FieldSection>
-        <CyclePicker days={cycleNum()} onChange={handleCycleChange} />
-      </FieldSection>
-
-      <FieldSection title="予備在庫">
-        <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10, lineHeight: 1.5 }}>
-          ストックがある分だけ、使い切りサイクルが延長されます（1個につき+{cycleNum()}日）
-        </p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.inkSoft, marginBottom: 10 }}>使い切り方の管理方法</div>
+        <div style={{ display: "flex", gap: 8 }}>
           <button
             type="button"
             onClick={() => {
               haptics.light();
-              setSpareStock((s) => Math.max(0, s - 1));
+              setTrackMode("cycle");
             }}
             style={{
-              width: 40,
-              height: 40,
+              flex: 1,
+              padding: "9px 0",
               borderRadius: 10,
-              border: `1px solid ${COLORS.line}`,
-              background: COLORS.card,
-              fontSize: 18,
+              border: `1px solid ${trackMode === "cycle" ? COLORS.navy : COLORS.line}`,
+              background: trackMode === "cycle" ? COLORS.navy : COLORS.card,
+              color: trackMode === "cycle" ? "#fff" : COLORS.ink,
               fontWeight: 700,
-              color: COLORS.ink,
+              fontSize: 13,
             }}
           >
-            −
+            サイクルで管理
           </button>
-          <div style={{ minWidth: 60, textAlign: "center" }}>
-            <div
-              key={spareStock}
-              style={{
-                fontSize: 22,
-                fontWeight: 900,
-                fontFamily: "'Zen Maru Gothic', sans-serif",
-                color: COLORS.navy,
-                animation: "bounceScale 0.3s ease",
-              }}
-            >
-              {spareStock}
-            </div>
-            <div style={{ fontSize: 10.5, color: COLORS.inkSoft }}>個</div>
-          </div>
           <button
             type="button"
             onClick={() => {
               haptics.light();
-              setSpareStock((s) => s + 1);
+              setTrackMode("expiry");
             }}
             style={{
-              width: 40,
-              height: 40,
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: "9px 0",
               borderRadius: 10,
-              border: `1px solid ${COLORS.line}`,
-              background: COLORS.card,
-              fontSize: 18,
+              border: `1px solid ${trackMode === "expiry" ? COLORS.navy : COLORS.line}`,
+              background: trackMode === "expiry" ? COLORS.navy : COLORS.card,
+              color: trackMode === "expiry" ? "#fff" : COLORS.ink,
               fontWeight: 700,
-              color: COLORS.ink,
+              fontSize: 13,
             }}
           >
-            ＋
+            <CalendarIcon size={14} /> 期限日で管理
           </button>
         </div>
-        {spareStock > 0 && (
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 10, textAlign: "center" }}>
-            合計で+{spareStock * cycleNum()}日分の余裕があります
-          </div>
-        )}
       </FieldSection>
 
-      <FieldSection>
-        {warnMode === "percent" ? (
-          <WarnPercentSlider cycleDays={cycleNum()} percent={percent} warnDays={warningDays} onChange={handlePercentChange} />
-        ) : (
-          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 14 }}>
-            現在の設定：{warningDays || 0}日前から買い物リストに追加（詳細設定で変更できます）
-          </div>
-        )}
-        <FixedWarnAdvanced
-          mode={warnMode}
-          fixedDays={warningDays}
-          onToggle={handleToggleFixed}
-          onFixedDaysChange={setWarningDays}
-        />
-      </FieldSection>
+      {trackMode === "expiry" ? (
+        <FieldSection>
+          <label style={labelStyle}>賞味/使用期限日</label>
+          <input
+            type="date"
+            style={inputStyle}
+            value={expiryDate}
+            onChange={(e) => setExpiryDate(e.target.value)}
+          />
+          <label style={labelStyle}>何日前から買い物リストに入れるか</label>
+          <input
+            type="number"
+            style={{ ...inputStyle, marginBottom: 0 }}
+            value={expiryWarnDays}
+            onChange={(e) => setExpiryWarnDays(e.target.value)}
+          />
+        </FieldSection>
+      ) : (
+        <>
+          <FieldSection>
+            <CyclePicker days={cycleNum()} onChange={handleCycleChange} />
+          </FieldSection>
 
-      <button
-        style={{
-          ...secondaryBtn,
-          marginBottom: 14,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 6,
-        }}
-        onClick={() => onOpenExtend(item)}
-      >
-        期限を延長する（まだ持ちそうな時）
-      </button>
+          <FieldSection title="予備在庫">
+            <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10, lineHeight: 1.5 }}>
+              ストックがある分だけ、使い切りサイクルが延長されます（1個につき+{cycleNum()}日）
+            </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  haptics.light();
+                  setSpareStock((s) => Math.max(0, s - 1));
+                }}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  border: `1px solid ${COLORS.line}`,
+                  background: COLORS.card,
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color: COLORS.ink,
+                }}
+              >
+                −
+              </button>
+              <div style={{ minWidth: 60, textAlign: "center" }}>
+                <div
+                  key={spareStock}
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 900,
+                    fontFamily: "'Zen Maru Gothic', sans-serif",
+                    color: COLORS.navy,
+                    animation: "bounceScale 0.3s ease",
+                  }}
+                >
+                  {spareStock}
+                </div>
+                <div style={{ fontSize: 10.5, color: COLORS.inkSoft }}>個</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  haptics.light();
+                  setSpareStock((s) => s + 1);
+                }}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 10,
+                  border: `1px solid ${COLORS.line}`,
+                  background: COLORS.card,
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color: COLORS.ink,
+                }}
+              >
+                ＋
+              </button>
+            </div>
+            {spareStock > 0 && (
+              <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 10, textAlign: "center" }}>
+                合計で+{spareStock * cycleNum()}日分の余裕があります
+              </div>
+            )}
+          </FieldSection>
+
+          <FieldSection>
+            {warnMode === "percent" ? (
+              <WarnPercentSlider cycleDays={cycleNum()} percent={percent} warnDays={warningDays} onChange={handlePercentChange} />
+            ) : (
+              <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 14 }}>
+                現在の設定：{warningDays || 0}日前から買い物リストに追加（詳細設定で変更できます）
+              </div>
+            )}
+            <FixedWarnAdvanced
+              mode={warnMode}
+              fixedDays={warningDays}
+              onToggle={handleToggleFixed}
+              onFixedDaysChange={setWarningDays}
+            />
+          </FieldSection>
+        </>
+      )}
+
+      {trackMode !== "expiry" && (
+        <button
+          style={{
+            ...secondaryBtn,
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+          onClick={() => onOpenExtend(item)}
+        >
+          期限を延長する（まだ持ちそうな時）
+        </button>
+      )}
 
       <FieldSection>
         <button
@@ -2291,15 +3391,19 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
 
       <button
         style={primaryBtn}
+        disabled={trackMode === "expiry" && !expiryDate}
         onClick={() =>
           onSave({
             name: name.trim() || item.name,
             genre,
             memo: memo.trim(),
-            spareStock: Math.max(0, spareStock),
-            cycleDays: cycleNum(),
-            warningDays: Math.max(0, parseInt(warningDays, 10) || 0),
+            spareStock: trackMode === "expiry" ? 0 : Math.max(0, spareStock),
+            cycleDays: trackMode === "expiry" ? null : cycleNum(),
+            warningDays: trackMode === "expiry" ? null : Math.max(0, parseInt(warningDays, 10) || 0),
             warnMode,
+            trackMode,
+            expiryDate: trackMode === "expiry" ? expiryDate : null,
+            expiryWarnDays: trackMode === "expiry" ? Math.max(0, parseInt(expiryWarnDays, 10) || 3) : null,
             barcodes: barcodes.map((b) => b.trim()).filter(Boolean),
           })
         }

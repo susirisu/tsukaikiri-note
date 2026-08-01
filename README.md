@@ -77,7 +77,7 @@ git push -u origin main
 
 ## 技術的な注意点
 
-- バーコードスキャンは `BarcodeDetector` API を使用しており、Android版Chromeなど対応ブラウザが必要です。非対応ブラウザでは手入力にフォールバックします。
+- バーコードスキャンは、Android版Chromeなど対応ブラウザでは `BarcodeDetector` API（高速・省電力）を使用します。iPhone(Safari)など`BarcodeDetector`非対応のブラウザでは、自動的に`@zxing/browser`ライブラリに切り替わります（読み取り速度はネイティブAPIよりやや劣りますが、実用上問題ないレベルです）。どちらも使えない場合は手入力にフォールバックします。
 - カメラ・振動(Vibration API)はいずれもHTTPS環境でのみ動作します。GitHub Pagesは自動的にHTTPSになるので問題ありません。
 - 振動(Haptics)はAndroid版Chromeなど対応ブラウザ・実機のみで動作します。PC(Windowsなど)のブラウザには振動するハードウェア自体がないため、動作確認はスマホ実機で行ってください。iPhone(Safari)は仕様上Vibration API自体に対応していません。
 - Firebaseを設定しなくてもアプリ自体は動きます（ローカル保存のみ、単一端末での利用になります）。
