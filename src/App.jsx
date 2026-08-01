@@ -192,6 +192,38 @@ function useLingering(value, duration = 220) {
   return [display, closing];
 }
 
+// Android等の「戻る」ボタンで、ページ遷移ではなくモーダルを閉じるようにするフック
+function useHistoryBack(isOpen, onClose) {
+  const openRef = useRef(false);
+  const closingViaPopRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen && !openRef.current) {
+      window.history.pushState({ __modal: true }, "");
+      openRef.current = true;
+    } else if (!isOpen && openRef.current) {
+      openRef.current = false;
+      if (!closingViaPopRef.current) {
+        window.history.back();
+      }
+      closingViaPopRef.current = false;
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (openRef.current) {
+        openRef.current = false;
+        closingViaPopRef.current = true;
+        onClose();
+      }
+    };
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+}
+
 function statusOf(item) {
   if (item.trackMode === "expiry" && item.expiryDate) {
     const daysLeft = isoDateDiff(todayISO(), item.expiryDate);
@@ -915,6 +947,16 @@ export default function App() {
   const [displaySettings, settingsClosing] = useLingering(showSettings);
   const [displayHistory, historyClosing] = useLingering(showHistory);
   const [displayCalendar, calendarClosing] = useLingering(showCalendar);
+
+  useHistoryBack(!!editingItem, () => setEditingItem(null));
+  useHistoryBack(!!extendingItem, () => {
+    setExtendingItem(null);
+    setExtendDays("7");
+  });
+  useHistoryBack(scanning, () => closeScan());
+  useHistoryBack(showSettings, () => setShowSettings(false));
+  useHistoryBack(showHistory, () => setShowHistory(false));
+  useHistoryBack(showCalendar, () => setShowCalendar(false));
   const [displayCycleAdopt, cycleAdoptClosing] = useLingering(cycleAdoptPrompt);
 
   const enriched = items
