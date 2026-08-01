@@ -466,8 +466,6 @@ export default function App() {
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const detectorRef = useRef(null);
-  const zxingReaderRef = useRef(null);
-  const zxingControlsRef = useRef(null);
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -644,13 +642,6 @@ export default function App() {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    if (zxingControlsRef.current) {
-      try {
-        zxingControlsRef.current.stop();
-      } catch (e) {}
-      zxingControlsRef.current = null;
-    }
-    zxingReaderRef.current = null;
   }, []);
 
   const closeScan = () => {
@@ -698,71 +689,40 @@ export default function App() {
     if (!scanning) return;
     let cancelled = false;
     (async () => {
-      if ("BarcodeDetector" in window) {
-        setScanUnsupported(false);
-        try {
-          detectorRef.current = new window.BarcodeDetector({
-            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
-          });
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" },
-          });
-          if (cancelled) {
-            stream.getTracks().forEach((t) => t.stop());
-            return;
-          }
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play();
-          }
-          intervalRef.current = setInterval(async () => {
-            if (!videoRef.current || !detectorRef.current) return;
-            try {
-              const codes = await detectorRef.current.detect(videoRef.current);
-              if (codes && codes.length > 0) {
-                handleDetected(codes[0].rawValue);
-              }
-            } catch (e) {
-              // ignore transient detection errors
-            }
-          }, 350);
-        } catch (e) {
-          setScanUnsupported(true);
-        }
+      if (!("BarcodeDetector" in window)) {
+        setScanUnsupported(true);
         return;
       }
-
-      // BarcodeDetector未対応（主にiOS Safari）: ZXingでフォールバック
+      setScanUnsupported(false);
       try {
-        const { BrowserMultiFormatReader } = await import("@zxing/browser");
-        if (cancelled) return;
-        setScanUnsupported(false);
-        const reader = new BrowserMultiFormatReader();
-        zxingReaderRef.current = reader;
-        const controls = await reader.decodeFromConstraints(
-          {
-            video: {
-              facingMode: "environment",
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
-          },
-          videoRef.current,
-          (result) => {
-            if (cancelled || !result) return;
-            handleDetected(result.getText());
-          }
-        );
+        detectorRef.current = new window.BarcodeDetector({
+          formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
+        });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+        });
         if (cancelled) {
-          try {
-            controls.stop();
-          } catch (e) {}
+          stream.getTracks().forEach((t) => t.stop());
           return;
         }
-        zxingControlsRef.current = controls;
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        intervalRef.current = setInterval(async () => {
+          if (!videoRef.current || !detectorRef.current) return;
+          try {
+            const codes = await detectorRef.current.detect(videoRef.current);
+            if (codes && codes.length > 0) {
+              handleDetected(codes[0].rawValue);
+            }
+          } catch (e) {
+            // ignore transient detection errors
+          }
+        }, 350);
       } catch (e) {
-        if (!cancelled) setScanUnsupported(true);
+        setScanUnsupported(true);
       }
     })();
     return () => {
@@ -2896,7 +2856,7 @@ function ScanModal(props) {
             marginBottom: 14,
           }}
         >
-          このブラウザではカメラでの自動スキャンに対応していないため、バーコード番号を手入力してください。
+          iPhone(Safari)など一部のブラウザでは、カメラでの自動スキャンに対応していません。お手数ですが、商品パッケージのバーコード番号（数字）を下に入力してください。
         </div>
       )}
       <label style={labelStyle}>バーコード番号（手入力）</label>
