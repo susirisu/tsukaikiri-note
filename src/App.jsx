@@ -467,6 +467,7 @@ export default function App() {
   const intervalRef = useRef(null);
   const detectorRef = useRef(null);
   const zxingReaderRef = useRef(null);
+  const zxingControlsRef = useRef(null);
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -643,12 +644,13 @@ export default function App() {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    if (zxingReaderRef.current) {
+    if (zxingControlsRef.current) {
       try {
-        zxingReaderRef.current.reset();
+        zxingControlsRef.current.stop();
       } catch (e) {}
-      zxingReaderRef.current = null;
+      zxingControlsRef.current = null;
     }
+    zxingReaderRef.current = null;
   }, []);
 
   const closeScan = () => {
@@ -738,14 +740,27 @@ export default function App() {
         setScanUnsupported(false);
         const reader = new BrowserMultiFormatReader();
         zxingReaderRef.current = reader;
-        await reader.decodeFromConstraints(
-          { video: { facingMode: "environment" } },
+        const controls = await reader.decodeFromConstraints(
+          {
+            video: {
+              facingMode: "environment",
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          },
           videoRef.current,
           (result) => {
             if (cancelled || !result) return;
             handleDetected(result.getText());
           }
         );
+        if (cancelled) {
+          try {
+            controls.stop();
+          } catch (e) {}
+          return;
+        }
+        zxingControlsRef.current = controls;
       } catch (e) {
         if (!cancelled) setScanUnsupported(true);
       }
