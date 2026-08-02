@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Home, ShoppingCart, ScanLine, X, Plus, Trash2, Check, Package, ChevronRight, ChevronLeft, AlertCircle, Settings, Loader2, Tag, ChevronDown, HelpCircle, History, CheckSquare, Square, Calendar as CalendarIcon, Search, LogIn, LogOut, Cloud, CloudOff } from "lucide-react";
 import { storage, subscribeAuth, signIn, signOutUser, syncOnLogin, isFirebaseConfigured, isEmailAllowed } from "./storage";
+
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap');`;
 
 const GENRES = ["食品・飲料", "洗面・バス用品", "掃除・洗濯用品", "医薬品・衛生用品", "キッチン用品", "ペット用品", "その他"];
@@ -292,6 +293,73 @@ function Bottle({ level, ratio }) {
       </g>
     </svg>
   );
+}
+
+function CalendarDots({ level, ratio }) {
+  const palette = { safe: COLORS.safe, warn: COLORS.warn, danger: COLORS.danger };
+  const bgPalette = { safe: COLORS.safeBg, warn: COLORS.warnBg, danger: COLORS.dangerBg };
+  const dotColor = palette[level] || COLORS.inkSoft;
+  const bodyFill = bgPalette[level] || COLORS.bg;
+  const total = 6;
+  const cols = 3;
+  const rows = 2;
+  const boxW = 28;
+  const boxH = 28;
+  const padX = 4;
+  const padTop = 8;
+  const padBottom = 4;
+  const cellW = (boxW - padX * 2) / cols;
+  const cellH = (boxH - padTop - padBottom) / rows;
+  const dotSize = Math.min(cellW, cellH) * 0.62;
+  const dotRadius = dotSize * 0.3;
+  const clampedRatio = Math.max(0, Math.min(1, ratio));
+  const lit = Math.min(total, Math.max(1, Math.round(total * (1 - clampedRatio))));
+
+  const dots = [];
+  for (let i = 0; i < total; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = padX + cellW * (col + 0.5);
+    const cy = padTop + cellH * (row + 0.5);
+    dots.push(
+      <rect
+        key={i}
+        x={cx - dotSize / 2}
+        y={cy - dotSize / 2}
+        width={dotSize}
+        height={dotSize}
+        rx={dotRadius}
+        fill={i < lit ? dotColor : "rgba(0,0,0,0.15)"}
+      />
+    );
+  }
+
+  return (
+    <svg width="27" height="27" viewBox={`0 0 ${boxW} ${boxH}`} style={{ flexShrink: 0 }}>
+      <rect
+        x="1"
+        y="1"
+        width={boxW - 2}
+        height={boxH - 2}
+        rx="6"
+        fill={bodyFill}
+        fillOpacity="0.5"
+        stroke={dotColor}
+        strokeWidth="1"
+        strokeOpacity="0.45"
+      />
+      <line x1="1" y1={padTop - 2} x2={boxW - 1} y2={padTop - 2} stroke={dotColor} strokeWidth="1" opacity="0.25" />
+      {dots}
+    </svg>
+  );
+}
+
+function StatusIcon({ item }) {
+  const ratio = item.totalCycle > 0 ? item.daysLeft / item.totalCycle : 0;
+  if (item.trackMode === "expiry") {
+    return <CalendarDots level={item.level} ratio={ratio} />;
+  }
+  return <Bottle level={item.level} ratio={ratio} />;
 }
 
 function ThemeShell({ darkMode, children }) {
@@ -947,6 +1015,7 @@ export default function App() {
   const [displaySettings, settingsClosing] = useLingering(showSettings);
   const [displayHistory, historyClosing] = useLingering(showHistory);
   const [displayCalendar, calendarClosing] = useLingering(showCalendar);
+  const [displayCycleAdopt, cycleAdoptClosing] = useLingering(cycleAdoptPrompt);
 
   useHistoryBack(!!editingItem, () => setEditingItem(null));
   useHistoryBack(!!extendingItem, () => {
@@ -957,7 +1026,6 @@ export default function App() {
   useHistoryBack(showSettings, () => setShowSettings(false));
   useHistoryBack(showHistory, () => setShowHistory(false));
   useHistoryBack(showCalendar, () => setShowCalendar(false));
-  const [displayCycleAdopt, cycleAdoptClosing] = useLingering(cycleAdoptPrompt);
 
   const enriched = items
     .map((it) => {
@@ -1467,7 +1535,7 @@ function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
         border: `1px solid ${COLORS.line}`,
       }}
     >
-      <Bottle level={item.level} ratio={ratio} />
+      <StatusIcon item={item} />
       <div style={{ flex: 1, minWidth: 0 }} onClick={() => onEdit(item)}>
         <div style={{ fontWeight: 700, fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {item.name}
@@ -1677,25 +1745,55 @@ function ShoppingList({ items, onEdit, onManualReset, onExtend }) {
       />
     );
   }
-  const urgent = items.filter((it) => it.level === "warn" || it.level === "danger");
-  const safe = items.filter((it) => it.level === "safe");
+  const cycleUrgent = items.filter(
+    (it) => (it.level === "warn" || it.level === "danger") && it.trackMode !== "expiry"
+  );
+  const expiryUrgent = items.filter(
+    (it) => (it.level === "warn" || it.level === "danger") && it.trackMode === "expiry"
+  );
   const unknown = items.filter((it) => it.level === "unknown");
+  const safe = items.filter((it) => it.level === "safe");
+  const hasAnyUrgent = cycleUrgent.length > 0 || expiryUrgent.length > 0;
+
+  let renderedAny = false;
+  const sectionSpacing = () => {
+    const style = renderedAny ? { marginTop: 22 } : {};
+    renderedAny = true;
+    return style;
+  };
+
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
         同じ商品(または代わりの商品)のバーコードをスキャンすると、リストから消えます
       </div>
-      {urgent.length === 0 ? (
+      {!hasAnyUrgent && (
         <div style={{ fontSize: 13, color: COLORS.inkSoft, padding: "12px 4px 4px" }}>
           今すぐ買うべきものはありません
         </div>
-      ) : (
-        urgent.map((it) => (
-          <ItemCard key={it.id} item={it} onEdit={onEdit} onManualReset={onManualReset} onExtend={onExtend} showMemo />
-        ))
+      )}
+      {cycleUrgent.length > 0 && (
+        <div style={sectionSpacing()}>
+          <div style={{ fontSize: 15, fontWeight: 900, color: COLORS.navy, marginBottom: 8, paddingLeft: 4, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
+            サイクル期限が近いもの
+          </div>
+          {cycleUrgent.map((it) => (
+            <ItemCard key={it.id} item={it} onEdit={onEdit} onManualReset={onManualReset} onExtend={onExtend} showMemo />
+          ))}
+        </div>
+      )}
+      {expiryUrgent.length > 0 && (
+        <div style={sectionSpacing()}>
+          <div style={{ fontSize: 15, fontWeight: 900, color: COLORS.navy, marginBottom: 8, paddingLeft: 4, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
+            消費期限が近いもの
+          </div>
+          {expiryUrgent.map((it) => (
+            <ItemCard key={it.id} item={it} onEdit={onEdit} onManualReset={onManualReset} onExtend={onExtend} showMemo />
+          ))}
+        </div>
       )}
       {unknown.length > 0 && (
-        <div style={{ marginTop: urgent.length > 0 ? 22 : 0 }}>
+        <div style={sectionSpacing()}>
           <GenreAccordion genre="目安日数未設定" count={unknown.length} defaultOpen={false}>
             <p style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
               次にスキャンすると、自動で目安日数が計算されます。
@@ -1706,15 +1804,16 @@ function ShoppingList({ items, onEdit, onManualReset, onExtend }) {
           </GenreAccordion>
         </div>
       )}
-      {(urgent.length > 0 || unknown.length > 0) && safe.length > 0 && <div style={{ height: 22 }} />}
       {safe.length > 0 && (
-        <div style={{ fontSize: 11, color: "#9BA69B", fontWeight: 700, marginBottom: 4, paddingLeft: 4 }}>
-          まだ余裕があるもの
+        <div style={sectionSpacing()}>
+          <div style={{ fontSize: 11, color: "#9BA69B", fontWeight: 700, marginBottom: 4, paddingLeft: 4 }}>
+            まだ余裕があるもの
+          </div>
+          {safe.map((it) => (
+            <CompactItemRow key={it.id} item={it} onEdit={onEdit} onExtend={onExtend} />
+          ))}
         </div>
       )}
-      {safe.map((it) => (
-        <CompactItemRow key={it.id} item={it} onEdit={onEdit} onExtend={onExtend} />
-      ))}
     </div>
   );
 }
@@ -1903,7 +2002,7 @@ function CalendarPage({ items, onBack, closing, onSelectItem }) {
                   border: "none",
                 }}
               >
-                <Bottle level={it.level} ratio={it.totalCycle > 0 ? it.daysLeft / it.totalCycle : 0} />
+                <StatusIcon item={it} />
                 <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14 }}>{it.name}</div>
                 <ChevronRight size={16} color={COLORS.inkSoft} />
               </button>
@@ -2001,10 +2100,7 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
           {detailItem ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                <Bottle
-                  level={detailItem.level}
-                  ratio={detailItem.totalCycle > 0 ? detailItem.daysLeft / detailItem.totalCycle : 0}
-                />
+                <StatusIcon item={detailItem} />
                 <div
                   style={{
                     fontSize: 12,
@@ -2116,7 +2212,7 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
                     border: "none",
                   }}
                 >
-                  <Bottle level={it.level} ratio={ratio} />
+                  <StatusIcon item={it} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{it.name}</div>
                     <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
@@ -2898,7 +2994,7 @@ function ScanModal(props) {
             marginBottom: 14,
           }}
         >
-          iPhone(Safari)など一部のブラウザでは、カメラでの自動スキャンに対応していません。お手数ですが、商品パッケージのバーコード番号（数字）を下に入力してください。
+          このブラウザではカメラでの自動スキャンに対応していないため、バーコード番号を手入力してください。
         </div>
       )}
       <label style={labelStyle}>バーコード番号（手入力）</label>
@@ -3132,7 +3228,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
         <button
           style={{
             ...primaryBtn,
-            marginBottom: 18,
+            marginBottom: item.trackMode === "expiry" ? 10 : 18,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -3141,6 +3237,22 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
           onClick={() => setConfirming(true)}
         >
           <Check size={16} /> 買った（今日からリセット）
+        </button>
+      )}
+      {showBuyButton && item.trackMode === "expiry" && (
+        <button
+          style={{
+            ...secondaryBtn,
+            marginBottom: 18,
+            color: COLORS.danger,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+          }}
+          onClick={() => setConfirmingDelete(true)}
+        >
+          <Trash2 size={16} /> この商品を削除
         </button>
       )}
 
@@ -3427,12 +3539,14 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
       >
         保存する
       </button>
-      <button
-        style={{ ...secondaryBtn, marginTop: 10, color: COLORS.danger, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-        onClick={() => setConfirmingDelete(true)}
-      >
-        <Trash2 size={16} /> この商品を削除
-      </button>
+      {!(showBuyButton && item.trackMode === "expiry") && (
+        <button
+          style={{ ...secondaryBtn, marginTop: 10, color: COLORS.danger, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+          onClick={() => setConfirmingDelete(true)}
+        >
+          <Trash2 size={16} /> この商品を削除
+        </button>
+      )}
     </ModalShell>
   );
 }
