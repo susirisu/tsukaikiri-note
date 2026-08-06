@@ -535,6 +535,10 @@ export default function App() {
   const [scannedCode, setScannedCode] = useState(null);
   const [unknownStep, setUnknownStep] = useState(null); // null | 'choose' | 'new' | 'link'
   const [pendingKnown, setPendingKnown] = useState(null); // item awaiting confirmation
+  const [stockChoiceItem, setStockChoiceItem] = useState(null); // safe-status item awaiting stock-vs-used choice
+  const [stockQtyMode, setStockQtyMode] = useState(false);
+  const [stockQty, setStockQty] = useState(1);
+  const [stockPopup, setStockPopup] = useState(null); // number to show in the +N celebration popup
   const [newName, setNewName] = useState("");
   const [newCycle, setNewCycle] = useState("30");
   const [newWarn, setNewWarn] = useState("3");
@@ -750,6 +754,8 @@ export default function App() {
     setScannedCode(null);
     setUnknownStep(null);
     setPendingKnown(null);
+    setStockChoiceItem(null);
+    setStockQtyMode(false);
     setManualCode("");
     setNewName("");
     setNewCycle("30");
@@ -776,7 +782,12 @@ export default function App() {
       setScannedCode(code);
       const owner = items.find((it) => it.barcodes.includes(code));
       if (owner) {
-        setPendingKnown(owner);
+        const status = statusOf(owner);
+        if (owner.trackMode !== "expiry" && owner.cycleDays != null && status.level === "safe") {
+          setStockChoiceItem({ ...owner, ...status });
+        } else {
+          setPendingKnown(owner);
+        }
       } else {
         setUnknownStep("choose");
         lookupByJan(code);
@@ -896,6 +907,63 @@ export default function App() {
     closeScan();
   };
 
+  const triggerStockPopup = (n) => {
+    const key = Date.now() + Math.random();
+    setStockPopup({ key, amount: n });
+    setTimeout(() => {
+      setStockPopup((cur) => (cur && cur.key === key ? null : cur));
+    }, 700);
+  };
+
+  const goStockQty = () => {
+    haptics.light();
+    setStockQty(1);
+    setStockQtyMode(true);
+  };
+
+  const incrementStockQty = () => {
+    haptics.light();
+    setStockQty((q) => q + 1);
+  };
+
+  const decrementStockQty = () => {
+    haptics.light();
+    setStockQty((q) => Math.max(1, q - 1));
+  };
+
+  const backToStockChoice = () => {
+    haptics.light();
+    setStockQtyMode(false);
+  };
+
+  const confirmStockQty = () => {
+    if (!stockChoiceItem) return;
+    const qty = stockQty;
+    const next = items.map((it) =>
+      it.id === stockChoiceItem.id ? { ...it, spareStock: (it.spareStock || 0) + qty } : it
+    );
+    persist(next);
+    showToast(`「${stockChoiceItem.name}」を予備在庫として+${qty}しました`);
+    haptics.success();
+    triggerStockPopup(qty);
+    setStockChoiceItem(null);
+    setStockQtyMode(false);
+    closeScan();
+  };
+
+  const proceedStockChoiceAsUsedUp = () => {
+    if (!stockChoiceItem) return;
+    setPendingKnown(stockChoiceItem);
+    setStockChoiceItem(null);
+  };
+
+  const cancelStockChoice = () => {
+    setStockChoiceItem(null);
+    setStockQtyMode(false);
+    setScannedCode(null);
+    closeScan();
+  };
+
   const registerNewItem = () => {
     if (!newName.trim()) return;
     if (newTrackMode === "expiry" && !newExpiryDate) return;
@@ -974,14 +1042,17 @@ export default function App() {
   };
 
   const deleteItem = (id) => {
+    const target = items.find((it) => it.id === id);
     haptics.warning();
     persist(items.filter((it) => it.id !== id));
+    if (target) showToast(`「${target.name}」を削除しました`);
     setEditingItem(null);
   };
 
   const updateItemFields = (id, fields) => {
     persist(items.map((it) => (it.id === id ? { ...it, ...fields } : it)));
     haptics.success();
+    showToast(`「${fields.name || "商品"}」を保存しました`);
   };
 
   const deleteHistoryEntries = (itemId, dates) => {
@@ -1086,6 +1157,13 @@ export default function App() {
         @keyframes pageSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
         @keyframes pageSlideOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
         @keyframes bounceScale { 0% { transform: scale(1); } 35% { transform: scale(1.35); } 65% { transform: scale(0.92); } 100% { transform: scale(1); } }
+        @keyframes stockPopup {
+          0% { transform: scale(0.4); opacity: 0; }
+          15% { transform: scale(1.15); opacity: 1; }
+          30% { transform: scale(1); opacity: 1; }
+          75% { transform: scale(1); opacity: 1; }
+          100% { transform: scale(1); opacity: 0; }
+        }
         @keyframes dropDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes dropUp { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
       `}</style>
@@ -1293,6 +1371,40 @@ export default function App() {
         </div>
       )}
 
+      {/* 予備在庫が増えた時のお祝いポップアップ */}
+      {stockPopup != null && (
+        <div
+          key={stockPopup.key}
+          style={{
+            position: "fixed",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            zIndex: 200,
+          }}
+        >
+          <div
+            style={{
+              background: COLORS.safe,
+              color: "#fff",
+              borderRadius: 20,
+              padding: "18px 28px",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+              animation: "stockPopup 0.7s ease forwards",
+              fontFamily: "'Zen Maru Gothic', sans-serif",
+            }}
+          >
+            <span style={{ fontSize: 28 }}>📦</span>
+            <span style={{ fontSize: 30, fontWeight: 900 }}>+{stockPopup.amount}</span>
+          </div>
+        </div>
+      )}
+
       {/* Scan modal */}
       {displayScanning && (
         <ScanModal
@@ -1310,6 +1422,16 @@ export default function App() {
           onCancelKnown={cancelKnownReset}
           pendingExpiryInput={pendingExpiryInput}
           onPendingExpiryChange={setPendingExpiryInput}
+          stockChoiceItem={stockChoiceItem}
+          onUsedUpInstead={proceedStockChoiceAsUsedUp}
+          onCancelStockChoice={cancelStockChoice}
+          stockQtyMode={stockQtyMode}
+          stockQty={stockQty}
+          onGoStockQty={goStockQty}
+          onIncrementStockQty={incrementStockQty}
+          onDecrementStockQty={decrementStockQty}
+          onConfirmStockQty={confirmStockQty}
+          onBackToStockChoice={backToStockChoice}
           items={items}
           newName={newName}
           setNewName={setNewName}
@@ -1364,6 +1486,7 @@ export default function App() {
             setExtendingItem(it);
           }}
           showBuyButton={editingContext === "shopping"}
+          onSpareBump={triggerStockPopup}
         />
       )}
 
@@ -2587,6 +2710,16 @@ function ScanModal(props) {
     onCancelKnown,
     pendingExpiryInput,
     onPendingExpiryChange,
+    stockChoiceItem,
+    onUsedUpInstead,
+    onCancelStockChoice,
+    stockQtyMode,
+    stockQty,
+    onGoStockQty,
+    onIncrementStockQty,
+    onDecrementStockQty,
+    onConfirmStockQty,
+    onBackToStockChoice,
     items,
     newName,
     setNewName,
@@ -2616,6 +2749,123 @@ function ScanModal(props) {
     onGoLink,
     onBackToChoose,
   } = props;
+
+  if (stockChoiceItem) {
+    if (stockQtyMode) {
+      return (
+        <ModalShell onClose={onCancelStockChoice} closing={closing} title="何個増やしますか？">
+          <div
+            style={{
+              background: COLORS.safeBg,
+              border: `1px solid ${COLORS.safe}`,
+              borderRadius: 14,
+              padding: "16px 14px",
+              marginBottom: 20,
+            }}
+          >
+            <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>予備として追加</div>
+            <div style={{ fontWeight: 900, fontSize: 18, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
+              {stockChoiceItem.name}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 20, marginBottom: 24 }}>
+            <button
+              type="button"
+              onClick={onDecrementStockQty}
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 12,
+                border: `1px solid ${COLORS.line}`,
+                background: COLORS.card,
+                fontSize: 20,
+                fontWeight: 700,
+                color: COLORS.ink,
+              }}
+            >
+              −
+            </button>
+            <div style={{ minWidth: 70, textAlign: "center" }}>
+              <div
+                key={stockQty}
+                style={{
+                  fontSize: 30,
+                  fontWeight: 900,
+                  fontFamily: "'Zen Maru Gothic', sans-serif",
+                  color: COLORS.safe,
+                  animation: "bounceScale 0.3s ease",
+                }}
+              >
+                {stockQty}
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.inkSoft }}>個</div>
+            </div>
+            <button
+              type="button"
+              onClick={onIncrementStockQty}
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 12,
+                border: `1px solid ${COLORS.line}`,
+                background: COLORS.card,
+                fontSize: 20,
+                fontWeight: 700,
+                color: COLORS.ink,
+              }}
+            >
+              ＋
+            </button>
+          </div>
+          <button
+            style={{ ...primaryBtn, marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+            onClick={onConfirmStockQty}
+          >
+            <Plus size={16} /> {stockQty}個追加する
+          </button>
+          <button style={secondaryBtn} onClick={onBackToStockChoice}>
+            戻る
+          </button>
+        </ModalShell>
+      );
+    }
+    return (
+      <ModalShell onClose={onCancelStockChoice} closing={closing} title="まだ余裕があるようです">
+        <div
+          style={{
+            background: COLORS.safeBg,
+            border: `1px solid ${COLORS.safe}`,
+            borderRadius: 14,
+            padding: "16px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>読み取った商品</div>
+          <div style={{ fontWeight: 900, fontSize: 18, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
+            {stockChoiceItem.name}
+          </div>
+          <div style={{ fontSize: 12, color: COLORS.safe, marginTop: 6, fontWeight: 700 }}>
+            まだ{stockChoiceItem.daysLeft > 0 ? `あと${stockChoiceItem.daysLeft}日分` : "十分"}残っているようです
+          </div>
+        </div>
+        <p style={{ fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 16, lineHeight: 1.7 }}>
+          このスキャンはどちらの記録にしますか？
+        </p>
+        <button
+          style={{ ...primaryBtn, marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+          onClick={onGoStockQty}
+        >
+          <Plus size={16} /> 予備として追加する
+        </button>
+        <button style={{ ...secondaryBtn, marginBottom: 10 }} onClick={onUsedUpInstead}>
+          今回を新しい開始日にする
+        </button>
+        <button style={secondaryBtn} onClick={onCancelStockChoice}>
+          キャンセル（読み取り間違いかも）
+        </button>
+      </ModalShell>
+    );
+  }
 
   if (pendingKnown) {
     const isExpiry = pendingKnown.trackMode === "expiry";
@@ -3074,7 +3324,7 @@ function FieldSection({ title, children }) {
   );
 }
 
-function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExtend, showBuyButton, closing }) {
+function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExtend, showBuyButton, onSpareBump, closing }) {
   const [name, setName] = useState(item.name);
   const [genre, setGenre] = useState(item.genre || "その他");
   const [cycleDays, setCycleDays] = useState(item.cycleDays != null ? String(item.cycleDays) : "30");
@@ -3395,6 +3645,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
                 onClick={() => {
                   haptics.light();
                   setSpareStock((s) => s + 1);
+                  if (onSpareBump) onSpareBump(1);
                 }}
                 style={{
                   width: 40,
