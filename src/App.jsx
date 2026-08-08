@@ -15,27 +15,55 @@ const ICON_SHAPES = [
   { key: "circle", label: "円グラフ" },
 ];
 
+// iOS Safari(WebKit)にはnavigator.vibrate()が存在しないため、
+// iOS 18以降で <input type="checkbox" switch> にデフォルトで付くhaptic feedbackを
+// 間接的に利用する（label経由でclickしないとWebKitの仕様上発火しない点に注意）。
+// 参考: https://zenn.dev/posaune0423/articles/4f963b89ca2fdf
+const isIOSDevice = () => {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isAppleTouch = /iPhone|iPad|iPod/.test(ua);
+  // iPadOS(13+)はMacintosh表記でUAを偽装しつつタッチ対応なので合わせて判定
+  const isIPadOSMasqueradingAsMac = ua.includes("Macintosh") && navigator.maxTouchPoints > 1;
+  return isAppleTouch || isIPadOSMasqueradingAsMac;
+};
+
+let hapticSwitchLabelEl = null;
+const getHapticSwitchLabel = () => {
+  if (typeof document === "undefined") return null;
+  if (hapticSwitchLabelEl) return hapticSwitchLabelEl;
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.id = "haptic-switch";
+  input.setAttribute("switch", "");
+  input.style.display = "none";
+  document.body.appendChild(input);
+
+  const label = document.createElement("label");
+  label.htmlFor = "haptic-switch";
+  label.style.display = "none";
+  document.body.appendChild(label);
+
+  hapticSwitchLabelEl = label;
+  return label;
+};
+
+const fireHaptic = (vibratePattern) => {
+  try {
+    if (isIOSDevice()) {
+      // iOSではパターン制御ができないため、強弱に関わらず同じ「コッ」という感触のみ
+      getHapticSwitchLabel()?.click();
+    } else if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(vibratePattern);
+    }
+  } catch (e) {}
+};
+
 const haptics = {
-  light: () => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(18);
-    } catch (e) {}
-  },
-  medium: () => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(30);
-    } catch (e) {}
-  },
-  success: () => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(40);
-    } catch (e) {}
-  },
-  warning: () => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([25, 40, 25]);
-    } catch (e) {}
-  },
+  light: () => fireHaptic(18),
+  medium: () => fireHaptic(30),
+  success: () => fireHaptic(40),
+  warning: () => fireHaptic([25, 40, 25]),
 };
 
 const COLORS = {
@@ -719,6 +747,7 @@ export default function App() {
   const quaggaContainerRef = useRef(null);
   const quaggaActiveRef = useRef(false);
   const quaggaModuleRef = useRef(null);
+  const quaggaEverStartedRef = useRef(false); // iOS: 2回目以降はカメラ解放待ちを挟むためのフラグ
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -1080,25 +1109,33 @@ export default function App() {
           waitForVideoReady().then(() => {
             if (cancelled) return;
             quaggaActiveRef.current = true;
+            quaggaEverStartedRef.current = true;
             Quagga.start();
             setScanStatus("読み取り中…（バーコードに10〜15cmまで近づけてください）");
           });
         };
 
-        const tryInit = (isRetry) => {
+        const MAX_INIT_ATTEMPTS = 3;
+        const RETRY_DELAYS_MS = [300, 600, 900]; // iOS実機はカメラ解放に時間がかかることがあるため段階的に伸ばす
+
+        const tryInit = (attempt) => {
           Quagga.init(quaggaConfig, (err) => {
             if (cancelled) return;
             if (err) {
-              console.error("Quagga init error", err);
-              if (!isRetry) {
-                // 前回セッションの後片付けが間に合っていない可能性があるため、
-                // 一度defensiveにstopしてから1回だけ再試行する
+              console.error(`Quagga init error (attempt ${attempt})`, err);
+              if (attempt < MAX_INIT_ATTEMPTS) {
+                // 前回セッションのカメラ解放が間に合っていない可能性があるため、
+                // defensiveにstopしつつコンテナ内の残留要素も掃除してから再試行する
                 try {
                   Quagga.stop();
                 } catch (e2) {}
+                if (quaggaContainerRef.current) {
+                  quaggaContainerRef.current.innerHTML = "";
+                }
+                setScanStatus("カメラの準備中…（再試行しています）");
                 setTimeout(() => {
-                  if (!cancelled) tryInit(true);
-                }, 200);
+                  if (!cancelled) tryInit(attempt + 1);
+                }, RETRY_DELAYS_MS[attempt - 1]);
                 return;
               }
               setScanStatus(`エラー: ${err?.message || "カメラを起動できませんでした"}`);
@@ -1109,12 +1146,24 @@ export default function App() {
           });
         };
 
-        tryInit(false);
-        Quagga.onDetected((result) => {
-          if (cancelled) return;
-          const code = result?.codeResult?.code;
-          if (code) handleDetected(code);
-        });
+        const startInit = () => {
+          tryInit(1);
+          Quagga.onDetected((result) => {
+            if (cancelled) return;
+            const code = result?.codeResult?.code;
+            if (code) handleDetected(code);
+          });
+        };
+
+        if (quaggaEverStartedRef.current) {
+          // 2回目以降の起動：前回のカメラ解放がiOS内部で終わるまで少し待ってから初期化する
+          setScanStatus("カメラの準備中…");
+          setTimeout(() => {
+            if (!cancelled) startInit();
+          }, 350);
+        } else {
+          startInit();
+        }
       } catch (e) {
         if (!cancelled) {
           console.error("Quagga load error", e);
