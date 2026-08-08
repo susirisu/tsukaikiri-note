@@ -275,9 +275,11 @@ const estimateCycleFromHistory = (history) => {
 };
 
 // 「買った」を記録する際、履歴に追記し、必要なら目安日数を自動推定する
-const buildPurchaseUpdate = (item, warnPercent, barcode) => {
-  const today = todayISO();
-  const history = [...(item.history || []), { stamp: nowStamp(), barcode: barcode || null }];
+// dateOverride: 実際の購入日を過去日付で指定したい場合（未指定ならtodayを使う）
+const buildPurchaseUpdate = (item, warnPercent, barcode, dateOverride) => {
+  const today = dateOverride || todayISO();
+  const stamp = dateOverride ? `${dateOverride}T12:00:00` : nowStamp();
+  const history = [...(item.history || []), { stamp, barcode: barcode || null }];
   const update = {
     lastPurchaseDate: today,
     extensionDays: 0,
@@ -793,6 +795,8 @@ export default function App() {
   const [stockChoiceItem, setStockChoiceItem] = useState(null); // safe-status item awaiting stock-vs-used choice
   const [pendingLinkTarget, setPendingLinkTarget] = useState(null); // item chosen in "link as replacement" flow, awaiting memo
   const [pendingLinkMemo, setPendingLinkMemo] = useState("");
+  // 実際に買った日を「今日」以外に変更したい場合の上書き値（未指定ならnull＝今日扱い）
+  const [purchaseDateOverride, setPurchaseDateOverride] = useState(null);
   const [stockQtyMode, setStockQtyMode] = useState(false);
   const [stockQty, setStockQty] = useState(1);
   const [stockPopup, setStockPopup] = useState(null); // number to show in the +N celebration popup
@@ -1061,6 +1065,7 @@ export default function App() {
     setStockChoiceItem(null);
     setPendingLinkTarget(null);
     setPendingLinkMemo("");
+    setPurchaseDateOverride(null);
     setStockQtyMode(false);
     setManualCode("");
     setNewName("");
@@ -1305,6 +1310,7 @@ export default function App() {
     setScanning(true);
     setUnknownStep(null);
     setScannedCode(null);
+    setPurchaseDateOverride(null);
     setNewWarn(String(calcWarnDays(parseInt(newCycle, 10) || 30, warnPercent)));
   };
 
@@ -1315,6 +1321,7 @@ export default function App() {
     setScanning(true);
     setUnknownStep("new");
     setScannedCode(null);
+    setPurchaseDateOverride(null);
     setNewWarn(String(calcWarnDays(parseInt(newCycle, 10) || 30, warnPercent)));
   };
 
@@ -1323,15 +1330,18 @@ export default function App() {
     handleDetected(manualCode.trim());
   };
 
-  const applyPurchase = (item, extraFields = {}, barcode = null) => {
+  const applyPurchase = (item, extraFields = {}, barcode = null, dateOverride = null) => {
     if (item.trackMode === "expiry") {
-      const history = [...(item.history || []), { stamp: nowStamp(), barcode: barcode || null }];
-      const next = items.map((it) => (it.id === item.id ? { ...it, lastPurchaseDate: todayISO(), history, ...extraFields } : it));
+      const stamp = dateOverride ? `${dateOverride}T12:00:00` : nowStamp();
+      const history = [...(item.history || []), { stamp, barcode: barcode || null }];
+      const next = items.map((it) =>
+        it.id === item.id ? { ...it, lastPurchaseDate: dateOverride || todayISO(), history, ...extraFields } : it
+      );
       persist(next);
       haptics.success();
       return;
     }
-    const provisional = buildPurchaseUpdate(item, warnPercent, barcode);
+    const provisional = buildPurchaseUpdate(item, warnPercent, barcode, dateOverride);
     const isNewlyEstimated = item.cycleDays == null && provisional.cycleDays != null;
     if (isNewlyEstimated) {
       const { cycleDays, warningDays, estimated, ...rest } = provisional;
@@ -1356,7 +1366,8 @@ export default function App() {
     applyPurchase(
       pendingKnown,
       pendingKnown.trackMode === "expiry" ? { expiryDate: pendingExpiryInput } : {},
-      scannedCode
+      scannedCode,
+      purchaseDateOverride
     );
     showToast(`「${pendingKnown.name}」を補充として記録しました`);
     closeScan();
@@ -1428,7 +1439,8 @@ export default function App() {
   const registerNewItem = () => {
     if (!newName.trim()) return;
     if (newTrackMode === "expiry" && !newExpiryDate) return;
-    const today = todayISO();
+    const today = purchaseDateOverride || todayISO();
+    const stamp = purchaseDateOverride ? `${purchaseDateOverride}T12:00:00` : nowStamp();
     const isExpiry = newTrackMode === "expiry";
     const item = {
       id: uid(),
@@ -1447,7 +1459,7 @@ export default function App() {
       iconShape: newIconShape,
       barcodeMemos: scannedCode && newBarcodeMemo.trim() ? { [scannedCode]: newBarcodeMemo.trim() } : {},
       estimated: false,
-      history: [{ stamp: nowStamp(), barcode: scannedCode || null }],
+      history: [{ stamp, barcode: scannedCode || null }],
     };
     persist([...items, item]);
     showToast(`「${item.name}」を登録しました`);
@@ -1496,16 +1508,22 @@ export default function App() {
     applyPurchase(
       target,
       { barcodes: [...new Set([...target.barcodes, scannedCode])], barcodeMemos: newBarcodeMemos },
-      scannedCode
+      scannedCode,
+      purchaseDateOverride
     );
     showToast(`「${target.name}」の買い替えとして記録しました`);
     closeScan();
   };
 
-  const resetCycleManually = (id, newExpiryDateValue) => {
+  const resetCycleManually = (id, newExpiryDateValue, dateOverride) => {
     const target = items.find((it) => it.id === id);
     if (!target) return;
-    applyPurchase(target, target.trackMode === "expiry" ? { expiryDate: newExpiryDateValue || target.expiryDate } : {});
+    applyPurchase(
+      target,
+      target.trackMode === "expiry" ? { expiryDate: newExpiryDateValue || target.expiryDate } : {},
+      null,
+      dateOverride
+    );
     showToast(`「${target.name}」を使い切りリセットしました`);
   };
 
@@ -1982,6 +2000,8 @@ export default function App() {
           onGoNew={() => setUnknownStep("new")}
           onGoLink={() => setUnknownStep("link")}
           onBackToChoose={() => setUnknownStep("choose")}
+          purchaseDateOverride={purchaseDateOverride}
+          onPurchaseDateOverrideChange={setPurchaseDateOverride}
         />
       )}
 
@@ -3219,6 +3239,60 @@ function CyclePicker({ days, onChange }) {
   );
 }
 
+// 「実際に買った日」を今日以外に変更したいときの折りたたみ入力欄。
+// 買ってすぐ登録する人が大多数のはずなので、普段は小さいリンクだけにしておき、
+// 必要な人だけ開いて過去日付を選べるようにする。
+function PurchaseDateField({ value, onChange, label = "購入日を変更する（買ってから登録が遅れた場合）" }) {
+  const [open, setOpen] = useState(!!value);
+  const today = todayISO();
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          marginTop: 6,
+          fontSize: 12,
+          fontWeight: 700,
+          color: COLORS.navy,
+          textDecoration: "underline",
+          cursor: "pointer",
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+  return (
+    <div style={{ marginTop: 10, marginBottom: 4 }}>
+      <label style={labelStyle}>実際に買った日</label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          type="date"
+          max={today}
+          value={value || today}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            onChange(null);
+            setOpen(false);
+          }}
+          style={{ ...secondaryBtn, padding: "9px 12px", fontSize: 12, marginBottom: 0 }}
+        >
+          今日に戻す
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function ScanModal(props) {
   const {
     closing,
@@ -3286,6 +3360,8 @@ function ScanModal(props) {
     onGoNew,
     onGoLink,
     onBackToChoose,
+    purchaseDateOverride,
+    onPurchaseDateOverrideChange,
   } = props;
 
   const [newIconPickerOpen, setNewIconPickerOpen] = useState(false);
@@ -3475,6 +3551,8 @@ function ScanModal(props) {
             />
           </div>
         )}
+        <PurchaseDateField value={purchaseDateOverride} onChange={onPurchaseDateOverrideChange} />
+        <div style={{ marginBottom: 16 }} />
         <button
           style={{ ...primaryBtn, marginBottom: 10 }}
           onClick={onConfirmKnown}
@@ -3498,9 +3576,10 @@ function ScanModal(props) {
         <button style={{ ...primaryBtn, marginBottom: 10 }} onClick={onGoNew}>
           新しい商品として登録する
         </button>
-        <button style={secondaryBtn} onClick={onGoLink}>
+        <button style={{ ...secondaryBtn, marginBottom: 4 }} onClick={onGoLink}>
           既存の商品の買い替えとして登録する
         </button>
+        <PurchaseDateField value={purchaseDateOverride} onChange={onPurchaseDateOverrideChange} />
       </ModalShell>
     );
   }
@@ -3754,6 +3833,8 @@ function ScanModal(props) {
             </div>
           </div>
         )}
+        <PurchaseDateField value={purchaseDateOverride} onChange={onPurchaseDateOverrideChange} />
+        <div style={{ marginTop: 6 }} />
         <button
           style={primaryBtn}
           onClick={onRegisterNew}
@@ -4098,6 +4179,8 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
     item.expiryWarnDays != null ? String(item.expiryWarnDays) : "3"
   );
   const [confirmExpiryInput, setConfirmExpiryInput] = useState("");
+  const [lastPurchaseDate, setLastPurchaseDate] = useState(item.lastPurchaseDate || todayISO());
+  const [confirmDateOverride, setConfirmDateOverride] = useState(null);
 
   const cycleNum = () => parseInt(cycleDays, 10) || item.cycleDays;
 
@@ -4166,11 +4249,13 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             />
           </div>
         )}
+        <PurchaseDateField value={confirmDateOverride} onChange={setConfirmDateOverride} />
+        <div style={{ marginBottom: 16 }} />
         <button
           style={{ ...primaryBtn, marginBottom: 10 }}
           disabled={isExpiry && !confirmExpiryInput}
           onClick={() => {
-            onManualReset(item.id, isExpiry ? confirmExpiryInput : undefined);
+            onManualReset(item.id, isExpiry ? confirmExpiryInput : undefined, confirmDateOverride);
             onClose();
           }}
         >
@@ -4381,11 +4466,33 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             value={expiryWarnDays}
             onChange={(e) => setExpiryWarnDays(e.target.value)}
           />
+          <label style={{ ...labelStyle, marginTop: 12 }}>購入日（任意・進捗表示に使われます）</label>
+          <input
+            type="date"
+            max={todayISO()}
+            style={{ ...inputStyle, marginBottom: 0 }}
+            value={lastPurchaseDate}
+            onChange={(e) => setLastPurchaseDate(e.target.value)}
+          />
         </FieldSection>
       ) : (
         <>
           <FieldSection>
             <CyclePicker days={cycleNum()} onChange={handleCycleChange} />
+          </FieldSection>
+
+          <FieldSection>
+            <label style={labelStyle}>使い切りサイクルの起点日（購入日）</label>
+            <input
+              type="date"
+              max={todayISO()}
+              style={{ ...inputStyle, marginBottom: 0 }}
+              value={lastPurchaseDate}
+              onChange={(e) => setLastPurchaseDate(e.target.value)}
+            />
+            <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>
+              登録が遅れて残り日数がずれてしまった場合など、あとから修正できます
+            </div>
           </FieldSection>
 
           <FieldSection title="予備在庫">
@@ -4593,6 +4700,7 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             iconShape,
             expiryDate: trackMode === "expiry" ? expiryDate : null,
             expiryWarnDays: trackMode === "expiry" ? Math.max(0, parseInt(expiryWarnDays, 10) || 3) : null,
+            lastPurchaseDate: lastPurchaseDate || item.lastPurchaseDate,
             barcodes: trimmedBarcodes.filter(Boolean),
             barcodeMemos: nextBarcodeMemos,
           });
