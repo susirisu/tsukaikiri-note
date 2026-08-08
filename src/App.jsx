@@ -672,6 +672,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanUnsupported, setScanUnsupported] = useState(false);
+  const [scanStatus, setScanStatus] = useState("");
   const [manualCode, setManualCode] = useState("");
   const [scannedCode, setScannedCode] = useState(null);
   const [unknownStep, setUnknownStep] = useState(null); // null | 'choose' | 'new' | 'link'
@@ -715,6 +716,8 @@ export default function App() {
   const streamRef = useRef(null);
   const intervalRef = useRef(null);
   const detectorRef = useRef(null);
+  const quaggaContainerRef = useRef(null);
+  const quaggaActiveRef = useRef(false);
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -891,12 +894,25 @@ export default function App() {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    if (quaggaActiveRef.current) {
+      quaggaActiveRef.current = false;
+      import("@ericblade/quagga2").then(({ default: Quagga }) => {
+        try {
+          Quagga.offDetected();
+          Quagga.stop();
+        } catch (e) {}
+      });
+    }
+    if (quaggaContainerRef.current) {
+      quaggaContainerRef.current.innerHTML = "";
+    }
   }, []);
 
   const closeScan = () => {
     stopCamera();
     setScanning(false);
     setScannedCode(null);
+    setScanStatus("");
     setUnknownStep(null);
     setPendingKnown(null);
     setStockChoiceItem(null);
@@ -949,40 +965,129 @@ export default function App() {
     if (!scanning) return;
     let cancelled = false;
     (async () => {
-      if (!("BarcodeDetector" in window)) {
-        setScanUnsupported(true);
+      if ("BarcodeDetector" in window) {
+        setScanUnsupported(false);
+        setScanStatus("カメラ起動中…");
+        try {
+          detectorRef.current = new window.BarcodeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
+          });
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" },
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+          }
+          setScanStatus("読み取り中…");
+          intervalRef.current = setInterval(async () => {
+            if (!videoRef.current || !detectorRef.current) return;
+            try {
+              const codes = await detectorRef.current.detect(videoRef.current);
+              if (codes && codes.length > 0) {
+                handleDetected(codes[0].rawValue);
+              }
+            } catch (e) {
+              // ignore transient detection errors
+            }
+          }, 350);
+        } catch (e) {
+          setScanStatus(`エラー: ${e?.message || "カメラを起動できませんでした"}`);
+          setScanUnsupported(true);
+        }
         return;
       }
-      setScanUnsupported(false);
+
+      // BarcodeDetector未対応（主にiOS Safari）: Quagga2でフォールバック
+      setScanStatus("読み取りライブラリを準備中…");
       try {
-        detectorRef.current = new window.BarcodeDetector({
-          formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"],
-        });
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
+        const { default: Quagga } = await import("@ericblade/quagga2");
+        if (cancelled) return;
+        if (!quaggaContainerRef.current) {
+          setScanStatus("エラー: 表示領域を初期化できませんでした");
+          setScanUnsupported(true);
           return;
         }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        intervalRef.current = setInterval(async () => {
-          if (!videoRef.current || !detectorRef.current) return;
-          try {
-            const codes = await detectorRef.current.detect(videoRef.current);
-            if (codes && codes.length > 0) {
-              handleDetected(codes[0].rawValue);
+        setScanUnsupported(false);
+        setScanStatus("カメラ起動中…");
+        Quagga.init(
+          {
+            inputStream: {
+              type: "LiveStream",
+              target: quaggaContainerRef.current,
+              constraints: {
+                facingMode: "environment",
+                width: { min: 640, ideal: 1280 },
+                height: { min: 480, ideal: 720 },
+              },
+            },
+            locator: {
+              patchSize: "medium",
+              halfSample: true,
+            },
+            numOfWorkers: 2,
+            frequency: 10,
+            decoder: {
+              readers: [
+                "ean_reader",
+                "ean_8_reader",
+                "code_128_reader",
+                "code_39_reader",
+                "upc_reader",
+                "upc_e_reader",
+              ],
+            },
+            locate: true,
+          },
+          (err) => {
+            if (cancelled) return;
+            if (err) {
+              console.error("Quagga init error", err);
+              setScanStatus(`エラー: ${err?.message || "カメラを起動できませんでした"}`);
+              setScanUnsupported(true);
+              return;
             }
-          } catch (e) {
-            // ignore transient detection errors
+            // iOS Safari対策：video要素に実際のフレームが来るまで解析を始めない
+            const videoEl = quaggaContainerRef.current?.querySelector("video");
+            const waitForVideoReady = () =>
+              new Promise((resolve) => {
+                const check = () => {
+                  if (cancelled) {
+                    resolve();
+                    return;
+                  }
+                  if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+                    resolve();
+                  } else {
+                    requestAnimationFrame(check);
+                  }
+                };
+                check();
+              });
+            waitForVideoReady().then(() => {
+              if (cancelled) return;
+              quaggaActiveRef.current = true;
+              Quagga.start();
+              setScanStatus("読み取り中…（バーコードに10〜15cmまで近づけてください）");
+            });
           }
-        }, 350);
+        );
+        Quagga.onDetected((result) => {
+          if (cancelled) return;
+          const code = result?.codeResult?.code;
+          if (code) handleDetected(code);
+        });
       } catch (e) {
-        setScanUnsupported(true);
+        if (!cancelled) {
+          console.error("Quagga load error", e);
+          setScanStatus(`エラー: ${e?.message || "読み取りライブラリを読み込めませんでした"}`);
+          setScanUnsupported(true);
+        }
       }
     })();
     return () => {
@@ -1591,6 +1696,8 @@ export default function App() {
         <ScanModal
           closing={scanningClosing}
           videoRef={videoRef}
+          quaggaContainerRef={quaggaContainerRef}
+          scanStatus={scanStatus}
           scanUnsupported={scanUnsupported}
           manualCode={manualCode}
           setManualCode={setManualCode}
@@ -2896,6 +3003,8 @@ function ScanModal(props) {
   const {
     closing,
     videoRef,
+    quaggaContainerRef,
+    scanStatus,
     scanUnsupported,
     manualCode,
     setManualCode,
@@ -3589,15 +3698,40 @@ function ScanModal(props) {
             marginBottom: 14,
           }}
         >
-          <video ref={videoRef} muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            {...{ "webkit-playsinline": "true" }}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+          <div ref={quaggaContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
           <div
             style={{
               position: "absolute",
               inset: "18% 12%",
               border: "2px solid rgba(255,255,255,0.85)",
               borderRadius: 12,
+              pointerEvents: "none",
             }}
           />
+          {scanStatus && (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: "rgba(0,0,0,0.6)",
+                color: "#fff",
+                fontSize: 11.5,
+                padding: "6px 10px",
+                textAlign: "center",
+              }}
+            >
+              {scanStatus}
+            </div>
+          )}
         </div>
       ) : (
         <div
