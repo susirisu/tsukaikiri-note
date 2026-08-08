@@ -66,6 +66,90 @@ const haptics = {
   warning: () => fireHaptic([25, 40, 25]),
 };
 
+// 日数を「一番自然な1単位」に丸めて表示するためのヘルパー。
+// 近いものは日単位で正確に、遠いものほど粗い単位（ヶ月→年）にする。
+// 例: 5 -> "5日", 240 -> "8ヶ月", 3600 -> "10年"
+function formatRoundedDuration(days) {
+  const n = Math.abs(days);
+  if (n < 30) return `${n}日`;
+  if (n < 365) return `${Math.round(n / 30)}ヶ月`;
+  return `${Math.round(n / 365)}年`;
+}
+
+// 「あと○日」の文言を作る共通ヘルパー（一覧・詳細などで表記を揃える）
+function formatDaysLeftExact(daysLeft) {
+  if (daysLeft > 0) return `あと ${daysLeft} 日`;
+  if (daysLeft === 0) return "本日が目安";
+  return `${-daysLeft} 日超過`;
+}
+
+// 一覧カード用：期限切れ以外は「あと○日」⇄「あと○ヶ月/年」をフェードで交互表示できるよう、
+// どちらの文言も返す（呼び出し側でフェード制御する）
+function formatDaysLeftRounded(daysLeft) {
+  if (daysLeft <= 0) return formatDaysLeftExact(daysLeft);
+  return `あと ${formatRoundedDuration(daysLeft)}`;
+}
+
+// 在庫一覧の全カードが同じタイミングで一斉にフェード切り替えするための共有タイマー。
+// カードごとに個別のタイマーを持たせるとバラバラのタイミングでチラついてうるさくなるため、
+// モジュール単位で1つのタイマーを共有し、購読している全カードへ同時に通知する。
+const daysLeftFadeSubscribers = new Set();
+let daysLeftFadeTimer = null;
+let daysLeftFadePhase = 0;
+function ensureDaysLeftFadeTimer() {
+  if (daysLeftFadeTimer) return;
+  daysLeftFadeTimer = setInterval(() => {
+    daysLeftFadePhase = daysLeftFadePhase === 0 ? 1 : 0;
+    daysLeftFadeSubscribers.forEach((cb) => cb(daysLeftFadePhase));
+  }, 5000);
+}
+function useDaysLeftFadePhase() {
+  const [phase, setPhase] = useState(daysLeftFadePhase);
+  useEffect(() => {
+    ensureDaysLeftFadeTimer();
+    daysLeftFadeSubscribers.add(setPhase);
+    return () => {
+      daysLeftFadeSubscribers.delete(setPhase);
+      if (daysLeftFadeSubscribers.size === 0 && daysLeftFadeTimer) {
+        clearInterval(daysLeftFadeTimer);
+        daysLeftFadeTimer = null;
+        daysLeftFadePhase = 0;
+      }
+    };
+  }, []);
+  return phase;
+}
+
+// 「あと○日」表示本体。3ヶ月以内は常に日数のまま固定（対象が多いと画面全体がチカチカして
+// しまうため）。3ヶ月を超えるものだけ、日数⇄丸めた単位（ヶ月/年）を一斉フェードで交互表示する。
+// フェードは完全に透明にはせず（不透明度を少し落とすだけ）、文字が一瞬消える「点滅」に見えない
+// ようにしている。
+const DAYS_LEFT_FADE_THRESHOLD = 90; // 3ヶ月
+function useDaysLeftDisplay(daysLeft, level) {
+  const fadePhase = useDaysLeftFadePhase();
+  const eligible = level !== "unknown" && daysLeft > DAYS_LEFT_FADE_THRESHOLD;
+  const targetLabel = eligible && fadePhase === 1 ? formatDaysLeftRounded(daysLeft) : formatDaysLeftExact(daysLeft);
+  const [label, setLabel] = useState(targetLabel);
+  const [dim, setDim] = useState(false);
+
+  useEffect(() => {
+    if (!eligible) {
+      setLabel(formatDaysLeftExact(daysLeft));
+      setDim(false);
+      return;
+    }
+    setDim(true);
+    const t = setTimeout(() => {
+      setLabel(targetLabel);
+      setDim(false);
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadePhase, eligible]);
+
+  return { label, dim };
+}
+
 const COLORS = {
   bg: "var(--color-bg)",
   card: "var(--color-card)",
@@ -809,6 +893,26 @@ export default function App() {
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 設定画面の「クラウドと同期」ボタンから手動で呼ぶ用。
+  // ログイン時の自動同期はいつ走ったか分かりにくく、知らないうちにデータが
+  // 入れ替わって不安になる、という声があったため、任意のタイミングで
+  // 明示的に同期できるようにする。
+  const handleManualSync = useCallback(async () => {
+    if (!user) return;
+    setSyncing(true);
+    try {
+      await syncOnLogin();
+      await loadAllFromStorage();
+      showToast("クラウドと同期しました");
+      haptics.success();
+    } catch (e) {
+      console.error("手動同期に失敗しました", e);
+      showToast("同期に失敗しました");
+    } finally {
+      setSyncing(false);
+    }
+  }, [user, loadAllFromStorage]);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
@@ -1935,6 +2039,7 @@ export default function App() {
           onToggleDarkMode={toggleDarkMode}
           user={user}
           syncing={syncing}
+          onManualSync={handleManualSync}
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
           onClose={() => setShowSettings(false)}
@@ -2042,14 +2147,8 @@ function NavButton({ icon, label, active, onClick, badge }) {
 
 function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
   const ratio = item.totalCycle > 0 ? item.daysLeft / item.totalCycle : 0;
-  const label =
-    item.level === "unknown"
-      ? "計測中"
-      : item.daysLeft > 0
-      ? `あと ${item.daysLeft} 日`
-      : item.daysLeft === 0
-      ? "本日が目安"
-      : `${-item.daysLeft} 日超過`;
+  const { label, dim } = useDaysLeftDisplay(item.daysLeft, item.level);
+  const displayLabel = item.level === "unknown" ? "計測中" : label;
   const statusColors = {
     safe: { fg: COLORS.safe, bg: COLORS.safeBg },
     warn: { fg: COLORS.warn, bg: COLORS.warnBg },
@@ -2085,9 +2184,11 @@ function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
               background: statusColors.bg,
               borderRadius: 8,
               padding: "2px 8px",
+              opacity: dim ? 0.45 : 1,
+              transition: "opacity 0.35s ease",
             }}
           >
-            {label}
+            {displayLabel}
           </div>
           {item.spareStock > 0 && (
             <span style={{ fontSize: 11, color: COLORS.inkSoft, fontWeight: 700, opacity: 0.75 }}>
@@ -2141,8 +2242,7 @@ function ItemCard({ item, onEdit, onManualReset, onExtend, showMemo }) {
 }
 
 function CompactItemRow({ item, onEdit, onExtend }) {
-  const label =
-    item.daysLeft > 0 ? `あと ${item.daysLeft} 日` : item.daysLeft === 0 ? "本日が目安" : `${-item.daysLeft} 日超過`;
+  const { label, dim } = useDaysLeftDisplay(item.daysLeft, item.level);
   return (
     <div
       onClick={() => onEdit(item)}
@@ -2168,7 +2268,9 @@ function CompactItemRow({ item, onEdit, onExtend }) {
       <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {item.name}
       </div>
-      <div style={{ fontSize: 11.5, flexShrink: 0 }}>{label}</div>
+      <div style={{ fontSize: 11.5, flexShrink: 0, opacity: dim ? 0.45 : 1, transition: "opacity 0.35s ease" }}>
+        {label}
+      </div>
       {item.spareStock > 0 && (
         <span style={{ fontSize: 10.5, flexShrink: 0, opacity: 0.75 }}>+{item.spareStock}</span>
       )}
@@ -3047,7 +3149,7 @@ const CYCLE_PRESETS = [
   { label: "半年", days: 180 },
   { label: "1年", days: 365 },
 ];
-const UNIT_MULTIPLIER = { 日: 1, 週間: 7, ヶ月: 30 };
+const UNIT_MULTIPLIER = { 日: 1, 週間: 7, ヶ月: 30, 年: 365 };
 
 function CyclePicker({ days, onChange }) {
   const [customValue, setCustomValue] = useState("");
@@ -3106,9 +3208,13 @@ function CyclePicker({ days, onChange }) {
           <option value="日">日</option>
           <option value="週間">週間</option>
           <option value="ヶ月">ヶ月</option>
+          <option value="年">年</option>
         </select>
       </div>
-      <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>現在の設定：{days || 0}日</div>
+      <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 6 }}>
+        現在の設定：{days ? formatRoundedDuration(days) : "0日"}
+        {days >= 30 ? `（${days}日）` : ""}
+      </div>
     </div>
   );
 }
@@ -4517,6 +4623,7 @@ function SettingsModal({
   onToggleDarkMode,
   user,
   syncing,
+  onManualSync,
   onSignIn,
   onSignOut,
   closing,
@@ -4541,6 +4648,21 @@ function SettingsModal({
                 </div>
               </div>
             </div>
+            <button
+              style={{
+                ...secondaryBtn,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                marginBottom: 8,
+                opacity: syncing ? 0.6 : 1,
+              }}
+              onClick={onManualSync}
+              disabled={syncing}
+            >
+              <Cloud size={16} className={syncing ? "spin" : ""} /> {syncing ? "同期中…" : "クラウドと同期"}
+            </button>
             <button
               style={{ ...secondaryBtn, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
               onClick={onSignOut}

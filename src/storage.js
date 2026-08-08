@@ -47,27 +47,37 @@ export async function signOutUser() {
 }
 
 function localGet(key) {
-  return localStorage.getItem(LOCAL_PREFIX + key);
+  const raw = localStorage.getItem(LOCAL_PREFIX + key);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && "value" in parsed && "updatedAt" in parsed) {
+      return { value: parsed.value, updatedAt: parsed.updatedAt || 0 };
+    }
+  } catch (e) {
+    // JSONとして壊れているなど：生の値扱いにフォールバック
+  }
+  // 旧形式（更新日時管理を入れる前に保存されたデータ）。日時が分からないので0扱いにし、
+  // クラウド側に何かあればそちらを優先させる。
+  return { value: raw, updatedAt: 0 };
 }
-function localSet(key, value) {
-  localStorage.setItem(LOCAL_PREFIX + key, value);
+function localSet(key, value, updatedAt = Date.now()) {
+  localStorage.setItem(LOCAL_PREFIX + key, JSON.stringify({ value, updatedAt }));
 }
 
 // key-value インターフェース（アーティファクト版の window.storage と互換）
 export const storage = {
   async get(key) {
     const local = localGet(key);
-    if (local !== null) return { key, value: local };
+    if (local !== null) return { key, value: local.value };
     throw new Error("not found");
   },
   async set(key, value) {
-    localSet(key, value);
+    const updatedAt = Date.now();
+    localSet(key, value, updatedAt);
     if (currentUser && db) {
       try {
-        await setDoc(doc(db, "users", currentUser.uid, "data", key), {
-          value,
-          updatedAt: Date.now(),
-        });
+        await setDoc(doc(db, "users", currentUser.uid, "data", key), { value, updatedAt });
       } catch (e) {
         console.warn("クラウドへの保存に失敗しました（ローカルには保存済みです）", e);
       }
@@ -76,23 +86,38 @@ export const storage = {
   },
 };
 
-// ログイン直後に1回だけ呼ぶ：クラウドにデータがあれば取り込み、なければローカルの内容をアップロードする
+// ログイン時・手動同期ボタンから呼ぶ：キーごとにローカルとクラウドの updatedAt を比較し、
+// 新しい方を勝たせる（同時刻ならクラウドを優先）。片方にしか無ければそちらをそのまま採用する。
 export async function syncOnLogin() {
   if (!currentUser || !db) return;
   for (const key of KNOWN_KEYS) {
     try {
       const snap = await getDoc(doc(db, "users", currentUser.uid, "data", key));
-      if (snap.exists()) {
-        localSet(key, snap.data().value);
-      } else {
-        const local = localGet(key);
-        if (local !== null) {
+      const local = localGet(key);
+      const cloud = snap.exists() ? snap.data() : null;
+      const cloudUpdatedAt = cloud?.updatedAt || 0;
+      const localUpdatedAt = local?.updatedAt || 0;
+
+      if (cloud && local) {
+        if (cloudUpdatedAt >= localUpdatedAt) {
+          // クラウドの方が新しい（または同時刻）→ ローカルをクラウドの内容で上書き
+          localSet(key, cloud.value, cloudUpdatedAt);
+        } else {
+          // ローカルの方が新しい → クラウドをローカルの内容で上書き
           await setDoc(doc(db, "users", currentUser.uid, "data", key), {
-            value: local,
-            updatedAt: Date.now(),
+            value: local.value,
+            updatedAt: localUpdatedAt,
           });
         }
+      } else if (cloud && !local) {
+        localSet(key, cloud.value, cloudUpdatedAt);
+      } else if (!cloud && local) {
+        await setDoc(doc(db, "users", currentUser.uid, "data", key), {
+          value: local.value,
+          updatedAt: localUpdatedAt || Date.now(),
+        });
       }
+      // 両方無ければ何もしない
     } catch (e) {
       console.warn(`同期に失敗しました: ${key}`, e);
     }
