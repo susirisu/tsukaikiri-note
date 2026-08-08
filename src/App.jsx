@@ -718,6 +718,7 @@ export default function App() {
   const detectorRef = useRef(null);
   const quaggaContainerRef = useRef(null);
   const quaggaActiveRef = useRef(false);
+  const quaggaModuleRef = useRef(null);
 
   const loadAllFromStorage = useCallback(async () => {
     try {
@@ -896,12 +897,20 @@ export default function App() {
     }
     if (quaggaActiveRef.current) {
       quaggaActiveRef.current = false;
-      import("@ericblade/quagga2").then(({ default: Quagga }) => {
+      if (quaggaModuleRef.current) {
         try {
-          Quagga.offDetected();
-          Quagga.stop();
+          quaggaModuleRef.current.offDetected();
+          quaggaModuleRef.current.stop();
         } catch (e) {}
-      });
+      } else {
+        // まだモジュールを読み込んでいない場合のみ、念のため非同期経路でも試す
+        import("@ericblade/quagga2").then(({ default: Quagga }) => {
+          try {
+            Quagga.offDetected();
+            Quagga.stop();
+          } catch (e) {}
+        });
+      }
     }
     if (quaggaContainerRef.current) {
       quaggaContainerRef.current.innerHTML = "";
@@ -1006,7 +1015,12 @@ export default function App() {
       // BarcodeDetector未対応（主にiOS Safari）: Quagga2でフォールバック
       setScanStatus("読み取りライブラリを準備中…");
       try {
-        const { default: Quagga } = await import("@ericblade/quagga2");
+        let Quagga = quaggaModuleRef.current;
+        if (!Quagga) {
+          const mod = await import("@ericblade/quagga2");
+          Quagga = mod.default;
+          quaggaModuleRef.current = Quagga;
+        }
         if (cancelled) return;
         if (!quaggaContainerRef.current) {
           setScanStatus("エラー: 表示領域を初期化できませんでした");
@@ -1015,68 +1029,87 @@ export default function App() {
         }
         setScanUnsupported(false);
         setScanStatus("カメラ起動中…");
-        Quagga.init(
-          {
-            inputStream: {
-              type: "LiveStream",
-              target: quaggaContainerRef.current,
-              constraints: {
-                facingMode: "environment",
-                width: { min: 640, ideal: 1280 },
-                height: { min: 480, ideal: 720 },
-              },
+
+        const quaggaConfig = {
+          inputStream: {
+            type: "LiveStream",
+            target: quaggaContainerRef.current,
+            constraints: {
+              facingMode: "environment",
+              width: { min: 640, ideal: 1280 },
+              height: { min: 480, ideal: 720 },
             },
-            locator: {
-              patchSize: "medium",
-              halfSample: true,
-            },
-            numOfWorkers: 2,
-            frequency: 10,
-            decoder: {
-              readers: [
-                "ean_reader",
-                "ean_8_reader",
-                "code_128_reader",
-                "code_39_reader",
-                "upc_reader",
-                "upc_e_reader",
-              ],
-            },
-            locate: true,
           },
-          (err) => {
+          locator: {
+            patchSize: "medium",
+            halfSample: true,
+          },
+          numOfWorkers: 2,
+          frequency: 10,
+          decoder: {
+            readers: [
+              "ean_reader",
+              "ean_8_reader",
+              "code_128_reader",
+              "code_39_reader",
+              "upc_reader",
+              "upc_e_reader",
+            ],
+          },
+          locate: true,
+        };
+
+        const startAfterReady = () => {
+          // iOS Safari対策：video要素に実際のフレームが来るまで解析を始めない
+          const videoEl = quaggaContainerRef.current?.querySelector("video");
+          const waitForVideoReady = () =>
+            new Promise((resolve) => {
+              const check = () => {
+                if (cancelled) {
+                  resolve();
+                  return;
+                }
+                if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+                  resolve();
+                } else {
+                  requestAnimationFrame(check);
+                }
+              };
+              check();
+            });
+          waitForVideoReady().then(() => {
+            if (cancelled) return;
+            quaggaActiveRef.current = true;
+            Quagga.start();
+            setScanStatus("読み取り中…（バーコードに10〜15cmまで近づけてください）");
+          });
+        };
+
+        const tryInit = (isRetry) => {
+          Quagga.init(quaggaConfig, (err) => {
             if (cancelled) return;
             if (err) {
               console.error("Quagga init error", err);
+              if (!isRetry) {
+                // 前回セッションの後片付けが間に合っていない可能性があるため、
+                // 一度defensiveにstopしてから1回だけ再試行する
+                try {
+                  Quagga.stop();
+                } catch (e2) {}
+                setTimeout(() => {
+                  if (!cancelled) tryInit(true);
+                }, 200);
+                return;
+              }
               setScanStatus(`エラー: ${err?.message || "カメラを起動できませんでした"}`);
               setScanUnsupported(true);
               return;
             }
-            // iOS Safari対策：video要素に実際のフレームが来るまで解析を始めない
-            const videoEl = quaggaContainerRef.current?.querySelector("video");
-            const waitForVideoReady = () =>
-              new Promise((resolve) => {
-                const check = () => {
-                  if (cancelled) {
-                    resolve();
-                    return;
-                  }
-                  if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
-                    resolve();
-                  } else {
-                    requestAnimationFrame(check);
-                  }
-                };
-                check();
-              });
-            waitForVideoReady().then(() => {
-              if (cancelled) return;
-              quaggaActiveRef.current = true;
-              Quagga.start();
-              setScanStatus("読み取り中…（バーコードに10〜15cmまで近づけてください）");
-            });
-          }
-        );
+            startAfterReady();
+          });
+        };
+
+        tryInit(false);
         Quagga.onDetected((result) => {
           if (cancelled) return;
           const code = result?.codeResult?.code;
@@ -1443,6 +1476,17 @@ export default function App() {
         @keyframes pageSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
         @keyframes pageSlideOut { from { transform: translateX(0); } to { transform: translateX(100%); } }
         @keyframes bounceScale { 0% { transform: scale(1); } 35% { transform: scale(1.35); } 65% { transform: scale(0.92); } 100% { transform: scale(1); } }
+        .quagga-scan-container video,
+        .quagga-scan-container canvas {
+          position: absolute !important;
+          top: 0 !important;
+          left: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+          max-width: none !important;
+          max-height: none !important;
+        }
         @keyframes stockPopup {
           0% { transform: scale(0.4); opacity: 0; }
           15% { transform: scale(1.15); opacity: 1; }
@@ -3705,7 +3749,7 @@ function ScanModal(props) {
             {...{ "webkit-playsinline": "true" }}
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
-          <div ref={quaggaContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+          <div ref={quaggaContainerRef} className="quagga-scan-container" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
           <div
             style={{
               position: "absolute",
