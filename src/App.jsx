@@ -700,6 +700,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanUnsupported, setScanUnsupported] = useState(false);
+  const [lastScanErrorDetail, setLastScanErrorDetail] = useState("");
   const [scanStatus, setScanStatus] = useState("");
   const [manualCode, setManualCode] = useState("");
   const [scannedCode, setScannedCode] = useState(null);
@@ -1036,6 +1037,7 @@ export default function App() {
           }, 350);
         } catch (e) {
           setScanStatus(`エラー: ${e?.message || "カメラを起動できませんでした"}`);
+          setLastScanErrorDetail(`BarcodeDetector: ${e?.name || ""} ${e?.message || ""}`.trim());
           setScanUnsupported(true);
         }
         return;
@@ -1052,11 +1054,22 @@ export default function App() {
         }
         if (cancelled) return;
         if (!quaggaContainerRef.current) {
-          setScanStatus("エラー: 表示領域を初期化できませんでした");
-          setScanUnsupported(true);
-          return;
+          // 表示領域のrefがまだ付いていないだけの可能性があるため、即失敗にせず少し待って再確認する
+          let waited = 0;
+          while (!quaggaContainerRef.current && waited < 1000 && !cancelled) {
+            await new Promise((r) => setTimeout(r, 100));
+            waited += 100;
+          }
+          if (cancelled) return;
+          if (!quaggaContainerRef.current) {
+            setScanStatus("エラー: 表示領域を初期化できませんでした");
+            setLastScanErrorDetail("quaggaContainerRef is null after wait");
+            setScanUnsupported(true);
+            return;
+          }
         }
         setScanUnsupported(false);
+        setLastScanErrorDetail("");
         setScanStatus("カメラ起動中…");
 
         const quaggaConfig = {
@@ -1139,6 +1152,7 @@ export default function App() {
                 return;
               }
               setScanStatus(`エラー: ${err?.message || "カメラを起動できませんでした"}`);
+              setLastScanErrorDetail(`Quagga.init: ${err?.name || ""} ${err?.message || ""}`.trim());
               setScanUnsupported(true);
               return;
             }
@@ -1168,6 +1182,7 @@ export default function App() {
         if (!cancelled) {
           console.error("Quagga load error", e);
           setScanStatus(`エラー: ${e?.message || "読み取りライブラリを読み込めませんでした"}`);
+          setLastScanErrorDetail(`Quagga load: ${e?.name || ""} ${e?.message || ""}`.trim());
           setScanUnsupported(true);
         }
       }
@@ -1180,6 +1195,9 @@ export default function App() {
   }, [scanning]);
 
   const openScan = () => {
+    // 前回のスキャンが失敗していても、開き直したら必ずもう一度カメラを試す
+    setScanUnsupported(false);
+    setLastScanErrorDetail("");
     setScanning(true);
     setUnknownStep(null);
     setScannedCode(null);
@@ -1188,6 +1206,8 @@ export default function App() {
 
   const openManualRegister = () => {
     haptics.light();
+    setScanUnsupported(false);
+    setLastScanErrorDetail("");
     setScanning(true);
     setUnknownStep("new");
     setScannedCode(null);
@@ -1792,6 +1812,7 @@ export default function App() {
           quaggaContainerRef={quaggaContainerRef}
           scanStatus={scanStatus}
           scanUnsupported={scanUnsupported}
+          lastScanErrorDetail={lastScanErrorDetail}
           manualCode={manualCode}
           setManualCode={setManualCode}
           onManualSubmit={submitManualCode}
@@ -3099,6 +3120,7 @@ function ScanModal(props) {
     quaggaContainerRef,
     scanStatus,
     scanUnsupported,
+    lastScanErrorDetail,
     manualCode,
     setManualCode,
     onManualSubmit,
@@ -3779,67 +3801,88 @@ function ScanModal(props) {
 
   return (
     <ModalShell onClose={onClose} closing={closing} title="バーコードをスキャン">
-      {!scanUnsupported ? (
+      {/*
+        カメラ用のvideo/quaggaContainerRefは常にDOM上にマウントしたままにする。
+        以前はscanUnsupported===trueのときにこのdivごと条件付きレンダリングで外していたため、
+        一度でも失敗するとrefが二度とアタッチされず、再オープンしても永久に「非対応」表示のまま
+        になってしまうバグがあった（開き直しても直らない不具合の原因）。
+        見た目の切り替えは中身/オーバーレイの出し分けだけで行う。
+      */}
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          aspectRatio: "3/4",
+          background: "#111",
+          borderRadius: 14,
+          overflow: "hidden",
+          marginBottom: 14,
+        }}
+      >
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          {...{ "webkit-playsinline": "true" }}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: scanUnsupported ? "none" : "block" }}
+        />
         <div
-          style={{
-            position: "relative",
-            width: "100%",
-            aspectRatio: "3/4",
-            background: "#111",
-            borderRadius: 14,
-            overflow: "hidden",
-            marginBottom: 14,
-          }}
-        >
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            {...{ "webkit-playsinline": "true" }}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-          <div ref={quaggaContainerRef} className="quagga-scan-container" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-          <div
-            style={{
-              position: "absolute",
-              inset: "18% 12%",
-              border: "2px solid rgba(255,255,255,0.85)",
-              borderRadius: 12,
-              pointerEvents: "none",
-            }}
-          />
-          {scanStatus && (
+          ref={quaggaContainerRef}
+          className="quagga-scan-container"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: scanUnsupported ? "none" : "block" }}
+        />
+        {!scanUnsupported && (
+          <>
             <div
               style={{
                 position: "absolute",
-                left: 0,
-                right: 0,
-                bottom: 0,
-                background: "rgba(0,0,0,0.6)",
-                color: "#fff",
-                fontSize: 11.5,
-                padding: "6px 10px",
-                textAlign: "center",
+                inset: "18% 12%",
+                border: "2px solid rgba(255,255,255,0.85)",
+                borderRadius: 12,
+                pointerEvents: "none",
               }}
-            >
-              {scanStatus}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div
-          style={{
-            background: COLORS.warnBg,
-            color: COLORS.warn,
-            borderRadius: 12,
-            padding: 14,
-            fontSize: 13,
-            marginBottom: 14,
-          }}
-        >
-          このブラウザではカメラでの自動スキャンに対応していないため、バーコード番号を手入力してください。
-        </div>
-      )}
+            />
+            {scanStatus && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: "rgba(0,0,0,0.6)",
+                  color: "#fff",
+                  fontSize: 11.5,
+                  padding: "6px 10px",
+                  textAlign: "center",
+                }}
+              >
+                {scanStatus}
+              </div>
+            )}
+          </>
+        )}
+        {scanUnsupported && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: COLORS.warnBg,
+              color: COLORS.warn,
+              padding: 14,
+              fontSize: 13,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            <div>このブラウザではカメラでの自動スキャンに対応していないため、バーコード番号を手入力してください。</div>
+            {lastScanErrorDetail && (
+              <div style={{ fontSize: 10.5, opacity: 0.75, wordBreak: "break-all" }}>詳細: {lastScanErrorDetail}</div>
+            )}
+          </div>
+        )}
+      </div>
       <label style={labelStyle}>バーコード番号（手入力）</label>
       <input
         style={inputStyle}
