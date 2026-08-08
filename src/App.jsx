@@ -6,6 +6,15 @@ const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Zen+M
 
 const GENRES = ["食品・飲料", "洗面・バス用品", "掃除・洗濯用品", "医薬品・衛生用品", "キッチン用品", "ペット用品", "その他"];
 
+const ICON_SHAPES = [
+  { key: "bottle", label: "ボトル" },
+  { key: "jar", label: "ジャー" },
+  { key: "box", label: "ボックス" },
+  { key: "tube", label: "チューブ" },
+  { key: "pouch", label: "パウチ" },
+  { key: "circle", label: "円グラフ" },
+];
+
 const haptics = {
   light: () => {
     try {
@@ -135,12 +144,17 @@ const isoDateDiff = (fromIso, toIso) => {
   return Math.round((b - a) / 86400000);
 };
 
+// 履歴エントリは以前は日時の文字列だけだったが、今はバーコードも含むオブジェクト形式。
+// 過去分（文字列のまま）にも対応できるよう、値を取り出すヘルパーを用意する
+const getStamp = (entry) => (typeof entry === "string" ? entry : entry.stamp);
+const getEntryBarcode = (entry) => (typeof entry === "string" ? null : entry.barcode || null);
+
 // 履歴（購入日の並び）から、平均の間隔日数を推定する。2件未満なら推定できない
 const estimateCycleFromHistory = (history) => {
   if (!history || history.length < 2) return null;
   const gaps = [];
   for (let i = 1; i < history.length; i++) {
-    const g = isoDateDiff(history[i - 1], history[i]);
+    const g = isoDateDiff(getStamp(history[i - 1]), getStamp(history[i]));
     if (g > 0) gaps.push(g);
   }
   if (gaps.length === 0) return null;
@@ -149,9 +163,9 @@ const estimateCycleFromHistory = (history) => {
 };
 
 // 「買った」を記録する際、履歴に追記し、必要なら目安日数を自動推定する
-const buildPurchaseUpdate = (item, warnPercent) => {
+const buildPurchaseUpdate = (item, warnPercent, barcode) => {
   const today = todayISO();
-  const history = [...(item.history || []), nowStamp()];
+  const history = [...(item.history || []), { stamp: nowStamp(), barcode: barcode || null }];
   const update = {
     lastPurchaseDate: today,
     extensionDays: 0,
@@ -247,15 +261,15 @@ function statusOf(item) {
   return { level: "safe", daysLeft, totalCycle };
 }
 
-function Bottle({ level, ratio }) {
+function Bottle({ level, ratio, shape }) {
   const palette = {
     safe: COLORS.safe,
     warn: COLORS.warn,
     danger: COLORS.danger,
   };
   const fillColor = palette[level];
-  const h = 34;
-  const fillH = Math.max(2, h * Math.max(0, Math.min(1, ratio)));
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const shapeKey = shape || "bottle";
 
   if (level === "unknown") {
     return (
@@ -280,18 +294,145 @@ function Bottle({ level, ratio }) {
     );
   }
 
+  const uid = `${shapeKey}-${level}-${Math.round(clamped * 100)}`;
+
+  if (shapeKey === "jar") {
+    const h = 21;
+    const fillH = Math.max(2, h * clamped);
+    return (
+      <svg width="34" height="30" viewBox="0 0 32 28" style={{ flexShrink: 0 }}>
+        <rect x="6" y="0" width="20" height="5" rx="2" fill={COLORS.bottleCap} />
+        <clipPath id={`c-${uid}`}>
+          <rect x="2" y="5" width="28" height="21" rx="7" />
+        </clipPath>
+        <rect x="2" y="5" width="28" height="21" rx="7" fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
+        <g clipPath={`url(#c-${uid})`}>
+          <rect x="2" y={26 - fillH} width="28" height={fillH} fill={fillColor} opacity="0.85" />
+        </g>
+      </svg>
+    );
+  }
+
+  if (shapeKey === "box") {
+    const h = 24;
+    const fillH = Math.max(2, h * clamped);
+    return (
+      <svg width="34" height="30" viewBox="0 0 32 28" style={{ flexShrink: 0 }}>
+        <clipPath id={`c-${uid}`}>
+          <rect x="2" y="2" width="28" height="24" rx="4" />
+        </clipPath>
+        <rect x="2" y="2" width="28" height="24" rx="4" fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
+        <g clipPath={`url(#c-${uid})`}>
+          <rect x="2" y={26 - fillH} width="28" height={fillH} fill={fillColor} opacity="0.85" />
+        </g>
+        <line x1="2" y1="9" x2="30" y2="9" stroke={COLORS.bottleStroke} strokeWidth="1" opacity="0.6" />
+      </svg>
+    );
+  }
+
+  if (shapeKey === "tube") {
+    const path = "M6 5 L14 5 L16 12 L16 34 Q16 38 10 38 Q4 38 4 34 L4 12 Z";
+    const h = 33;
+    const fillH = Math.max(2, h * clamped);
+    return (
+      <svg width="24" height="46" viewBox="0 0 20 40" style={{ flexShrink: 0 }}>
+        <rect x="7" y="0" width="6" height="5" rx="1.5" fill={COLORS.bottleCap} />
+        <path d={path} fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
+        <clipPath id={`c-${uid}`}>
+          <path d={path} />
+        </clipPath>
+        <g clipPath={`url(#c-${uid})`}>
+          <rect x="4" y={38 - fillH} width="12" height={fillH} fill={fillColor} opacity="0.85" />
+        </g>
+      </svg>
+    );
+  }
+
+  if (shapeKey === "pouch") {
+    const path = "M4 4 Q2 2 4 1 L22 1 Q24 2 22 4 L24 24 Q24 29 13 29 Q2 29 2 24 Z";
+    const h = 25;
+    const fillH = Math.max(2, h * clamped);
+    return (
+      <svg width="30" height="34" viewBox="0 0 26 30" style={{ flexShrink: 0 }}>
+        <path d={path} fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
+        <clipPath id={`c-${uid}`}>
+          <path d={path} />
+        </clipPath>
+        <g clipPath={`url(#c-${uid})`}>
+          <rect x="2" y={29 - fillH} width="22" height={fillH} fill={fillColor} opacity="0.85" />
+        </g>
+      </svg>
+    );
+  }
+
+  if (shapeKey === "circle") {
+    const r = 12;
+    const circumference = 2 * Math.PI * r;
+    const dash = circumference * clamped;
+    return (
+      <svg width="30" height="30" viewBox="0 0 28 28" style={{ flexShrink: 0 }}>
+        <circle cx="14" cy="14" r={r} fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
+        <circle
+          cx="14"
+          cy="14"
+          r={r}
+          fill="none"
+          stroke={fillColor}
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circumference}`}
+          transform="rotate(-90 14 14)"
+          opacity="0.9"
+        />
+      </svg>
+    );
+  }
+
+  // デフォルト：ボトル
+  const h = 34;
+  const fillH = Math.max(2, h * clamped);
   return (
     <svg width="26" height="40" viewBox="0 0 26 40" style={{ flexShrink: 0 }}>
       <rect x="9" y="0" width="8" height="6" rx="1.5" fill={COLORS.bottleCap} />
       <rect x="7" y="5" width="12" height="4" rx="1" fill={COLORS.bottleCap} />
-      <clipPath id={`clip-${level}-${Math.round(ratio * 100)}`}>
+      <clipPath id={`c-${uid}`}>
         <rect x="2" y="9" width="22" height="30" rx="6" />
       </clipPath>
       <rect x="2" y="9" width="22" height="30" rx="6" fill={COLORS.bottleBody} stroke={COLORS.bottleStroke} strokeWidth="1" />
-      <g clipPath={`url(#clip-${level}-${Math.round(ratio * 100)})`}>
+      <g clipPath={`url(#c-${uid})`}>
         <rect x="2" y={39 - fillH} width="22" height={fillH} fill={fillColor} opacity="0.85" />
       </g>
     </svg>
+  );
+}
+
+function IconShapeGrid({ value, onChange }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+      {ICON_SHAPES.map((s) => (
+        <button
+          key={s.key}
+          type="button"
+          onClick={() => {
+            haptics.light();
+            onChange(s.key);
+          }}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 6,
+            padding: "10px 4px",
+            borderRadius: 12,
+            border: `1px solid ${value === s.key ? COLORS.navy : COLORS.line}`,
+            background: value === s.key ? COLORS.safeBg : COLORS.card,
+          }}
+        >
+          <Bottle level="safe" ratio={0.75} shape={s.key} />
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.inkSoft }}>{s.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -359,7 +500,7 @@ function StatusIcon({ item }) {
   if (item.trackMode === "expiry") {
     return <CalendarDots level={item.level} ratio={ratio} />;
   }
-  return <Bottle level={item.level} ratio={ratio} />;
+  return <Bottle level={item.level} ratio={ratio} shape={item.iconShape || "bottle"} />;
 }
 
 function ThemeShell({ darkMode, children }) {
@@ -536,6 +677,8 @@ export default function App() {
   const [unknownStep, setUnknownStep] = useState(null); // null | 'choose' | 'new' | 'link'
   const [pendingKnown, setPendingKnown] = useState(null); // item awaiting confirmation
   const [stockChoiceItem, setStockChoiceItem] = useState(null); // safe-status item awaiting stock-vs-used choice
+  const [pendingLinkTarget, setPendingLinkTarget] = useState(null); // item chosen in "link as replacement" flow, awaiting memo
+  const [pendingLinkMemo, setPendingLinkMemo] = useState("");
   const [stockQtyMode, setStockQtyMode] = useState(false);
   const [stockQty, setStockQty] = useState(1);
   const [stockPopup, setStockPopup] = useState(null); // number to show in the +N celebration popup
@@ -545,6 +688,8 @@ export default function App() {
   const [newGenre, setNewGenre] = useState(GENRES[0]);
   const [newCycleUnknown, setNewCycleUnknown] = useState(false);
   const [newTrackMode, setNewTrackMode] = useState("cycle");
+  const [newIconShape, setNewIconShape] = useState("bottle");
+  const [newBarcodeMemo, setNewBarcodeMemo] = useState("");
   const [newExpiryDate, setNewExpiryDate] = useState("");
   const [newExpiryWarnDays, setNewExpiryWarnDays] = useState("3");
   const [pendingExpiryInput, setPendingExpiryInput] = useState("");
@@ -755,6 +900,8 @@ export default function App() {
     setUnknownStep(null);
     setPendingKnown(null);
     setStockChoiceItem(null);
+    setPendingLinkTarget(null);
+    setPendingLinkMemo("");
     setStockQtyMode(false);
     setManualCode("");
     setNewName("");
@@ -763,6 +910,8 @@ export default function App() {
     setNewGenre(GENRES[0]);
     setNewCycleUnknown(false);
     setNewTrackMode("cycle");
+    setNewIconShape("bottle");
+    setNewBarcodeMemo("");
     setNewExpiryDate("");
     setNewExpiryWarnDays("3");
     setPendingExpiryInput("");
@@ -863,15 +1012,15 @@ export default function App() {
     handleDetected(manualCode.trim());
   };
 
-  const applyPurchase = (item, extraFields = {}) => {
+  const applyPurchase = (item, extraFields = {}, barcode = null) => {
     if (item.trackMode === "expiry") {
-      const history = [...(item.history || []), nowStamp()];
+      const history = [...(item.history || []), { stamp: nowStamp(), barcode: barcode || null }];
       const next = items.map((it) => (it.id === item.id ? { ...it, lastPurchaseDate: todayISO(), history, ...extraFields } : it));
       persist(next);
       haptics.success();
       return;
     }
-    const provisional = buildPurchaseUpdate(item, warnPercent);
+    const provisional = buildPurchaseUpdate(item, warnPercent, barcode);
     const isNewlyEstimated = item.cycleDays == null && provisional.cycleDays != null;
     if (isNewlyEstimated) {
       const { cycleDays, warningDays, estimated, ...rest } = provisional;
@@ -895,7 +1044,8 @@ export default function App() {
     if (pendingKnown.trackMode === "expiry" && !pendingExpiryInput) return;
     applyPurchase(
       pendingKnown,
-      pendingKnown.trackMode === "expiry" ? { expiryDate: pendingExpiryInput } : {}
+      pendingKnown.trackMode === "expiry" ? { expiryDate: pendingExpiryInput } : {},
+      scannedCode
     );
     showToast(`「${pendingKnown.name}」を補充として記録しました`);
     closeScan();
@@ -983,8 +1133,10 @@ export default function App() {
       extensionDays: 0,
       spareStock: 0,
       warnMode: "percent",
+      iconShape: newIconShape,
+      barcodeMemos: scannedCode && newBarcodeMemo.trim() ? { [scannedCode]: newBarcodeMemo.trim() } : {},
       estimated: false,
-      history: [nowStamp()],
+      history: [{ stamp: nowStamp(), barcode: scannedCode || null }],
     };
     persist([...items, item]);
     showToast(`「${item.name}」を登録しました`);
@@ -1002,10 +1154,39 @@ export default function App() {
     }
   };
 
-  const linkToExisting = (itemId) => {
+  const selectLinkTarget = (item) => {
+    haptics.light();
+    setPendingLinkTarget(item);
+    setPendingLinkMemo("");
+    setUnknownStep("linkMemo");
+  };
+
+  const confirmLinkWithMemo = () => {
+    if (!pendingLinkTarget) return;
+    linkToExisting(pendingLinkTarget.id, pendingLinkMemo);
+    setPendingLinkTarget(null);
+    setPendingLinkMemo("");
+  };
+
+  const skipLinkMemo = () => {
+    if (!pendingLinkTarget) return;
+    linkToExisting(pendingLinkTarget.id, "");
+    setPendingLinkTarget(null);
+    setPendingLinkMemo("");
+  };
+
+  const linkToExisting = (itemId, memo) => {
     const target = items.find((it) => it.id === itemId);
     if (!target) return;
-    applyPurchase(target, { barcodes: [...new Set([...target.barcodes, scannedCode])] });
+    const trimmedMemo = (memo || "").trim();
+    const newBarcodeMemos = trimmedMemo
+      ? { ...(target.barcodeMemos || {}), [scannedCode]: trimmedMemo }
+      : target.barcodeMemos || {};
+    applyPurchase(
+      target,
+      { barcodes: [...new Set([...target.barcodes, scannedCode])], barcodeMemos: newBarcodeMemos },
+      scannedCode
+    );
     showToast(`「${target.name}」の買い替えとして記録しました`);
     closeScan();
   };
@@ -1058,7 +1239,7 @@ export default function App() {
   const deleteHistoryEntries = (itemId, dates) => {
     haptics.warning();
     const next = items.map((it) =>
-      it.id === itemId ? { ...it, history: (it.history || []).filter((d) => !dates.includes(d)) } : it
+      it.id === itemId ? { ...it, history: (it.history || []).filter((d) => !dates.includes(getStamp(d))) } : it
     );
     persist(next);
     showToast(`履歴を${dates.length}件削除しました`);
@@ -1459,10 +1640,20 @@ export default function App() {
             setNewTrackMode("expiry");
           }}
           onRevertTrackMode={() => setNewTrackMode("cycle")}
+          newIconShape={newIconShape}
+          setNewIconShape={setNewIconShape}
+          newBarcodeMemo={newBarcodeMemo}
+          setNewBarcodeMemo={setNewBarcodeMemo}
           lookup={lookup}
           onRegisterNew={handleRegisterClick}
           onConfirmDuplicate={registerNewItem}
           onLinkExisting={linkToExisting}
+          onSelectLinkTarget={selectLinkTarget}
+          pendingLinkTarget={pendingLinkTarget}
+          pendingLinkMemo={pendingLinkMemo}
+          onPendingLinkMemoChange={setPendingLinkMemo}
+          onConfirmLinkWithMemo={confirmLinkWithMemo}
+          onSkipLinkMemo={skipLinkMemo}
           onGoNew={() => setUnknownStep("new")}
           onGoLink={() => setUnknownStep("link")}
           onBackToChoose={() => setUnknownStep("choose")}
@@ -2147,16 +2338,16 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
     .filter((it) => (it.history || []).length > 0)
     .slice()
     .sort((a, b) => {
-      const aLast = a.history[a.history.length - 1];
-      const bLast = b.history[b.history.length - 1];
+      const aLast = getStamp(a.history[a.history.length - 1]);
+      const bLast = getStamp(b.history[b.history.length - 1]);
       return bLast.localeCompare(aLast);
     });
 
   const detailItem = detailId ? items.find((it) => it.id === detailId) : null;
 
-  const toggleSelect = (date) => {
+  const toggleSelect = (stamp) => {
     haptics.light();
-    setSelected((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
+    setSelected((prev) => (prev.includes(stamp) ? prev.filter((d) => d !== stamp) : [...prev, stamp]));
   };
 
   const openDetail = (id) => {
@@ -2263,8 +2454,11 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
                   {selecting ? "キャンセル" : "選択"}
                 </button>
               </div>
-              {[...(detailItem.history || [])].sort().map((stamp, i, history) => {
-                const gap = i > 0 ? isoDateDiff(history[i - 1], stamp) : null;
+              {[...(detailItem.history || [])].sort((a, b) => getStamp(a).localeCompare(getStamp(b))).map((entry, i, history) => {
+                const stamp = getStamp(entry);
+                const barcode = getEntryBarcode(entry);
+                const entryMemo = barcode ? detailItem.barcodeMemos?.[barcode] : null;
+                const gap = i > 0 ? isoDateDiff(getStamp(history[i - 1]), stamp) : null;
                 const checked = selected.includes(stamp);
                 return (
                   <div
@@ -2286,7 +2480,11 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
                     )}
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{formatStamp(stamp)}</div>
-                      {gap != null && <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>前回から{gap}日</div>}
+                      <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
+                        {barcode ? barcode : "バーコード不明"}
+                        {entryMemo ? `・${entryMemo}` : ""}
+                        {gap != null ? `　前回から${gap}日` : ""}
+                      </div>
                     </div>
                   </div>
                 );
@@ -2339,7 +2537,7 @@ function HistoryPage({ items, onBack, closing, onDeleteEntries }) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{it.name}</div>
                     <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
-                      {h.length}回スキャン・最終 {formatStamp(last)}
+                      {h.length}回スキャン・最終 {formatStamp(getStamp(last))}
                     </div>
                   </div>
                   <ChevronRight size={18} color={COLORS.inkSoft} />
@@ -2741,14 +2939,27 @@ function ScanModal(props) {
     setNewExpiryWarnDays,
     onSetExpiryMode,
     onRevertTrackMode,
+    newIconShape,
+    setNewIconShape,
+    newBarcodeMemo,
+    setNewBarcodeMemo,
     lookup,
     onRegisterNew,
     onConfirmDuplicate,
     onLinkExisting,
+    onSelectLinkTarget,
+    pendingLinkTarget,
+    pendingLinkMemo,
+    onPendingLinkMemoChange,
+    onConfirmLinkWithMemo,
+    onSkipLinkMemo,
     onGoNew,
     onGoLink,
     onBackToChoose,
   } = props;
+
+  const [newIconPickerOpen, setNewIconPickerOpen] = useState(false);
+  const [newBarcodeSectionOpen, setNewBarcodeSectionOpen] = useState(false);
 
   if (stockChoiceItem) {
     if (stockQtyMode) {
@@ -2844,6 +3055,22 @@ function ScanModal(props) {
           <div style={{ fontWeight: 900, fontSize: 18, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
             {stockChoiceItem.name}
           </div>
+          {stockChoiceItem.barcodeMemos?.[scannedCode] && (
+            <div
+              style={{
+                display: "inline-block",
+                fontSize: 11.5,
+                fontWeight: 700,
+                color: COLORS.navy,
+                background: "#fff",
+                borderRadius: 8,
+                padding: "2px 8px",
+                marginTop: 4,
+              }}
+            >
+              {stockChoiceItem.barcodeMemos[scannedCode]}
+            </div>
+          )}
           <div style={{ fontSize: 12, color: COLORS.safe, marginTop: 6, fontWeight: 700 }}>
             まだ{stockChoiceItem.daysLeft > 0 ? `あと${stockChoiceItem.daysLeft}日分` : "十分"}残っているようです
           </div>
@@ -2884,6 +3111,22 @@ function ScanModal(props) {
           <div style={{ fontWeight: 900, fontSize: 18, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
             {pendingKnown.name}
           </div>
+          {pendingKnown.barcodeMemos?.[scannedCode] && (
+            <div
+              style={{
+                display: "inline-block",
+                fontSize: 11.5,
+                fontWeight: 700,
+                color: COLORS.navy,
+                background: COLORS.safeBg,
+                borderRadius: 8,
+                padding: "2px 8px",
+                marginTop: 4,
+              }}
+            >
+              {pendingKnown.barcodeMemos[scannedCode]}
+            </div>
+          )}
           <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6 }}>
             {isExpiry
               ? "「買った」として記録します。新しいパッケージの期限日を入力してください"
@@ -2932,6 +3175,20 @@ function ScanModal(props) {
     );
   }
 
+  if (unknownStep === "new" && newIconPickerOpen) {
+    return (
+      <ModalShell onClose={() => setNewIconPickerOpen(false)} closing={closing} title="アイコンを選択">
+        <IconShapeGrid
+          value={newIconShape}
+          onChange={(key) => {
+            setNewIconShape(key);
+            setNewIconPickerOpen(false);
+          }}
+        />
+      </ModalShell>
+    );
+  }
+
   if (unknownStep === "new") {
     return (
       <ModalShell onClose={onClose} closing={closing} title="新しい商品を登録">
@@ -2950,7 +3207,29 @@ function ScanModal(props) {
             自動取得できませんでした（{lookup.error}）。手入力してください。
           </div>
         )}
-        <label style={labelStyle}>商品名</label>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <label style={{ ...labelStyle, marginBottom: 0 }}>商品名</label>
+          {newTrackMode !== "expiry" && (
+            <button
+              type="button"
+              onClick={() => {
+                haptics.light();
+                setNewIconPickerOpen(true);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                border: "none",
+                background: "none",
+                padding: "2px 4px",
+              }}
+            >
+              <Bottle level="safe" ratio={0.75} shape={newIconShape} />
+              <ChevronDown size={13} color={COLORS.inkSoft} />
+            </button>
+          )}
+        </div>
         <input
           style={inputStyle}
           value={newName}
@@ -3093,6 +3372,58 @@ function ScanModal(props) {
             買い物リストに追加するタイミングは設定の一括ルールが自動で適用されます。この商品だけ個別に調整したい場合は、在庫一覧から商品を選んで設定できます。
           </p>
         )}
+        {scannedCode && (
+          <div style={{ marginBottom: 14 }}>
+            <button
+              type="button"
+              onClick={() => {
+                haptics.light();
+                setNewBarcodeSectionOpen((o) => !o);
+              }}
+              style={{
+                border: "none",
+                background: "none",
+                color: COLORS.inkSoft,
+                fontSize: 12.5,
+                fontWeight: 700,
+                padding: "2px 0",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              登録バーコード {newBarcodeSectionOpen ? "▲" : "▼"}
+            </button>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateRows: newBarcodeSectionOpen ? "1fr" : "0fr",
+                transition: "grid-template-rows 0.28s ease",
+              }}
+            >
+              <div style={{ overflow: "hidden" }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    background: COLORS.card,
+                    border: `1px solid ${COLORS.line}`,
+                    borderRadius: 12,
+                    padding: 12,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{scannedCode}</div>
+                  <label style={labelStyle}>メモ（任意）</label>
+                  <input
+                    style={{ ...inputStyle, marginBottom: 0 }}
+                    value={newBarcodeMemo}
+                    onChange={(e) => setNewBarcodeMemo(e.target.value)}
+                    placeholder="例：本体・詰め替え用"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <button
           style={primaryBtn}
           onClick={onRegisterNew}
@@ -3183,7 +3514,7 @@ function ScanModal(props) {
               {group.list.map((it) => (
                 <button
                   key={it.id}
-                  onClick={() => onLinkExisting(it.id)}
+                  onClick={() => onSelectLinkTarget(it)}
                   style={{
                     width: "100%",
                     textAlign: "left",
@@ -3204,6 +3535,41 @@ function ScanModal(props) {
         )}
         <button style={{ ...secondaryBtn, marginTop: 6 }} onClick={onBackToChoose}>
           戻る
+        </button>
+      </ModalShell>
+    );
+  }
+
+  if (unknownStep === "linkMemo") {
+    return (
+      <ModalShell onClose={onSkipLinkMemo} closing={closing} title="メモを追加しますか？">
+        <div
+          style={{
+            background: COLORS.card,
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 14,
+            padding: "16px 14px",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 4 }}>買い替え先</div>
+          <div style={{ fontWeight: 900, fontSize: 18, fontFamily: "'Zen Maru Gothic', sans-serif" }}>
+            {pendingLinkTarget?.name}
+          </div>
+        </div>
+        <label style={labelStyle}>このバーコードについてのメモ（任意）</label>
+        <input
+          style={inputStyle}
+          value={pendingLinkMemo}
+          onChange={(e) => onPendingLinkMemoChange(e.target.value)}
+          placeholder="例：詰め替え用"
+          autoFocus
+        />
+        <button style={{ ...primaryBtn, marginTop: 4, marginBottom: 10 }} onClick={onConfirmLinkWithMemo}>
+          追加する
+        </button>
+        <button style={secondaryBtn} onClick={onSkipLinkMemo}>
+          スキップ
         </button>
       </ModalShell>
     );
@@ -3332,6 +3698,9 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
     item.warningDays != null ? String(item.warningDays) : String(calcWarnDays(item.cycleDays ?? 30, 20))
   );
   const [barcodes, setBarcodes] = useState(item.barcodes);
+  const [barcodeMemoList, setBarcodeMemoList] = useState(
+    item.barcodes.map((b) => (item.barcodeMemos ? item.barcodeMemos[b] || "" : ""))
+  );
   const [barcodesOpen, setBarcodesOpen] = useState(false);
   const [memo, setMemo] = useState(item.memo || "");
   const [spareStock, setSpareStock] = useState(item.spareStock || 0);
@@ -3346,6 +3715,8 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
   const [percent, setPercent] = useState(initialPercent);
   const [warnMode, setWarnMode] = useState(item.warnMode || "percent");
   const [trackMode, setTrackMode] = useState(item.trackMode || "cycle");
+  const [iconShape, setIconShape] = useState(item.iconShape || "bottle");
+  const [showIconPicker, setShowIconPicker] = useState(false);
   const [expiryDate, setExpiryDate] = useState(item.expiryDate || "");
   const [expiryWarnDays, setExpiryWarnDays] = useState(
     item.expiryWarnDays != null ? String(item.expiryWarnDays) : "3"
@@ -3375,9 +3746,13 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
   const updateBarcode = (index, value) => {
     setBarcodes((prev) => prev.map((b, i) => (i === index ? value : b)));
   };
+  const updateBarcodeMemo = (index, value) => {
+    setBarcodeMemoList((prev) => prev.map((m, i) => (i === index ? value : m)));
+  };
   const deleteBarcode = (index) => {
     haptics.warning();
     setBarcodes((prev) => prev.filter((_, i) => i !== index));
+    setBarcodeMemoList((prev) => prev.filter((_, i) => i !== index));
   };
 
   if (confirming) {
@@ -3472,6 +3847,20 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
     );
   }
 
+  if (showIconPicker) {
+    return (
+      <ModalShell onClose={() => setShowIconPicker(false)} closing={closing} title="アイコンを選択">
+        <IconShapeGrid
+          value={iconShape}
+          onChange={(key) => {
+            setIconShape(key);
+            setShowIconPicker(false);
+          }}
+        />
+      </ModalShell>
+    );
+  }
+
   return (
     <ModalShell onClose={onClose} closing={closing} title="商品を編集">
       {showBuyButton && (
@@ -3507,7 +3896,29 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
       )}
 
       <FieldSection title="基本情報">
-        <label style={labelStyle}>商品名</label>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <label style={{ ...labelStyle, marginBottom: 0 }}>商品名</label>
+          {trackMode === "cycle" && (
+            <button
+              type="button"
+              onClick={() => {
+                haptics.light();
+                setShowIconPicker(true);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                border: "none",
+                background: "none",
+                padding: "2px 4px",
+              }}
+            >
+              <Bottle level="safe" ratio={0.75} shape={iconShape} />
+              <ChevronDown size={13} color={COLORS.inkSoft} />
+            </button>
+          )}
+        </div>
         <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
         <label style={{ ...labelStyle, marginTop: 4 }}>ジャンル</label>
         <select
@@ -3741,27 +4152,42 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
                 </div>
               )}
               {barcodes.map((code, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <div
+                  key={i}
+                  style={{
+                    marginBottom: 10,
+                    paddingBottom: 10,
+                    borderBottom: i < barcodes.length - 1 ? `1px solid ${COLORS.line}` : "none",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                    <input
+                      style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+                      value={code}
+                      onChange={(e) => updateBarcode(i, e.target.value)}
+                      inputMode="numeric"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => deleteBarcode(i)}
+                      style={{
+                        border: `1px solid ${COLORS.line}`,
+                        background: COLORS.card,
+                        borderRadius: 10,
+                        padding: "9px 10px",
+                        color: COLORS.danger,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                   <input
-                    style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
-                    value={code}
-                    onChange={(e) => updateBarcode(i, e.target.value)}
-                    inputMode="numeric"
+                    style={{ ...inputStyle, marginBottom: 0, fontSize: 12.5 }}
+                    value={barcodeMemoList[i] || ""}
+                    onChange={(e) => updateBarcodeMemo(i, e.target.value)}
+                    placeholder="メモ（例：本体・詰め替え用）"
                   />
-                  <button
-                    type="button"
-                    onClick={() => deleteBarcode(i)}
-                    style={{
-                      border: `1px solid ${COLORS.line}`,
-                      background: COLORS.card,
-                      borderRadius: 10,
-                      padding: "9px 10px",
-                      color: COLORS.danger,
-                      flexShrink: 0,
-                    }}
-                  >
-                    <Trash2 size={15} />
-                  </button>
                 </div>
               ))}
             </div>
@@ -3772,7 +4198,13 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
       <button
         style={primaryBtn}
         disabled={trackMode === "expiry" && !expiryDate}
-        onClick={() =>
+        onClick={() => {
+          const trimmedBarcodes = barcodes.map((b) => b.trim());
+          const nextBarcodeMemos = {};
+          trimmedBarcodes.forEach((b, i) => {
+            const m = (barcodeMemoList[i] || "").trim();
+            if (b && m) nextBarcodeMemos[b] = m;
+          });
           onSave({
             name: name.trim() || item.name,
             genre,
@@ -3782,11 +4214,13 @@ function EditModal({ item, onClose, onSave, onDelete, onManualReset, onOpenExten
             warningDays: trackMode === "expiry" ? null : Math.max(0, parseInt(warningDays, 10) || 0),
             warnMode,
             trackMode,
+            iconShape,
             expiryDate: trackMode === "expiry" ? expiryDate : null,
             expiryWarnDays: trackMode === "expiry" ? Math.max(0, parseInt(expiryWarnDays, 10) || 3) : null,
-            barcodes: barcodes.map((b) => b.trim()).filter(Boolean),
-          })
-        }
+            barcodes: trimmedBarcodes.filter(Boolean),
+            barcodeMemos: nextBarcodeMemos,
+          });
+        }}
       >
         保存する
       </button>
